@@ -44,13 +44,18 @@ class DENExpansionPlugin(SupervisedPlugin):
 
     def after_training_epoch(self, strategy: "SupervisedTemplate", *args, **kwargs):
         curr_epoch = strategy.train_epochs
-        d = self.compute_output_decision(strategy=strategy)
+        d = self.compute_output_decision(strategy)
         print(f"\nMargem de decisão: {d:.2f}")
-        e = self.compute_output_entropy(strategy)
+        e = self.compute_global_entropy(strategy)
         print(f"\nEntropia: {e:.2f}")
+        a = self.compute_output_entropy_per_class(strategy)
+        print(f"\nEntropia media por classe: {a}")
         l = self.compute_saturated_neurons(strategy)
-        print(f"Media de Saturação da Camada: {l:.2f}")
+        print(f"\nMedia de Saturação da Camada: {l}")
+        t = self.compute_gradients_norm(strategy)
+        print(f"\nNorma dos gradientes da Camada: {t}")
 
+    # Mean Decision margin
     def compute_output_decision(self, strategy: "SupervisedTemplate"):
         outputs = strategy.mb_output
         probs = torch.softmax(outputs, dim=1)
@@ -61,7 +66,8 @@ class DENExpansionPlugin(SupervisedPlugin):
 
         return margins.mean()
 
-    def compute_output_entropy(self, strategy: "SupervisedTemplate"):
+    # Mean Global Entropy
+    def compute_global_entropy(self, strategy: "SupervisedTemplate"):
         outputs = strategy.mb_output
         probs = torch.softmax(outputs, dim=1)
         log_probs = torch.log(probs + 1e-10)
@@ -76,6 +82,35 @@ class DENExpansionPlugin(SupervisedPlugin):
 
         return norm_entropy.mean()
 
+    # Mean Entropy per class
+    def compute_output_entropy_per_class(self, strategy: "SupervisedTemplate"):
+        outputs = strategy.mb_output
+        labels = strategy.mb_y
+
+        probs = torch.softmax(outputs, dim=1)
+        log_probs = torch.log(probs + 1e-10)
+        entropy = -torch.sum(probs * log_probs, dim=1)
+
+        num_classes = probs.size(1)
+        max_entropy = torch.log(
+            torch.tensor(num_classes, dtype=probs.dtype, device=probs.device)
+        )
+
+        norm_entropy = entropy / max_entropy
+        entropy_per_class = {}
+        unique_classes = torch.unique(labels)
+
+        for c in unique_classes:
+            idx = labels == c
+            if idx.sum() > 0:
+                class_entropy = norm_entropy[idx].mean()
+                entropy_per_class[int(c.item())] = class_entropy.item()
+            else:
+                entropy_per_class[int(c.item())] = float("nan")
+
+        return entropy_per_class
+
+    # Mean Neurons saturateds by layer
     def compute_saturated_neurons(self, strategy: "SupervisedTemplate", threshold=1e-3):
         layers = {}
         for name, module in strategy.model.named_modules():
@@ -87,5 +122,14 @@ class DENExpansionPlugin(SupervisedPlugin):
                 total = mean.numel()
 
                 layers[name] = saturated / total
+
+        return layers
+
+    def compute_gradients_norm(self, strategy: "SupervisedTemplate"):
+        layers = {}
+        for name, module in strategy.model.named_modules():
+            if isinstance(module, DENLayer):
+                grads = module.compute_average_gradient_norm()
+                layers[name] = grads
 
         return layers

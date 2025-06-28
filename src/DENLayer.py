@@ -23,6 +23,23 @@ class DENLayer(nn.Module):
 
         return x
 
+    def compute_average_gradient_norm(self):
+        total_norm = 0.0
+        total_elements = 0
+
+        for p in self.parameters():
+            if p.grad is not None:
+                grad_flat = p.grad.data.view(-1)
+
+                total_norm += grad_flat.abs().sum().item()
+
+                total_elements += grad_flat.numel()
+
+        if total_elements == 0:
+            return 0.0
+
+        return total_norm / total_elements
+
     def compute_sum_activation(self, x):
         batch_sum = x.detach().sum(dim=0)
 
