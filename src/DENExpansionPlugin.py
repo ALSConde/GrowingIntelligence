@@ -42,18 +42,33 @@ class DENExpansionPlugin(SupervisedPlugin):
         self.use_saturation = use_saturation
         self.n_exp = n_exp
 
-    def after_training_epoch(self, strategy: "SupervisedTemplate", *args, **kwargs):
-        curr_epoch = strategy.train_epochs
-        d = self.compute_output_decision(strategy)
-        print(f"\nMargem de decisão: {d:.2f}")
+        self.last_grads = None
+
+    def before_training_epoch(self, strategy: "SupervisedTemplate"):
+        grads = self.get_flat_gradients(strategy.model)
+        if grads is None:
+            return
+        self.last_grads = grads.detach()
+
+    def before_update(self, strategy: "SupervisedTemplate", *args, **kwargs):
+        if self.last_grads == [] or self.last_grads is None:
+            self.last_grads = self.get_flat_gradients(strategy.model)
+        m = self.compute_output_decision(strategy)
+        print(f"\nMargem de decisão: {m:.2f}")
         e = self.compute_global_entropy(strategy)
         print(f"\nEntropia: {e:.2f}")
-        a = self.compute_output_entropy_per_class(strategy)
-        print(f"\nEntropia media por classe: {a}")
-        l = self.compute_saturated_neurons(strategy)
-        print(f"\nMedia de Saturação da Camada: {l}")
-        t = self.compute_gradients_norm(strategy)
-        print(f"\nNorma dos gradientes da Camada: {t}")
+        ec = self.compute_output_entropy_per_class(strategy)
+        print(f"\nEntropia media por classe: {ec}")
+        s = self.compute_saturated_neurons(strategy)
+        print(f"\nMedia de Saturação da Camada: {s}")
+        g = self.compute_gradients_norm(strategy)
+        print(f"\nNorma dos gradientes da Camada: {g}")
+        cg = self.compute_cos_grad(strategy)
+        print(f"\nCos dos gradientes da Camada: {cg}")
+
+        if (1 - cg) >= 0.90 or e >= 0.2 or (1 - m) >= 0.3 or max(ec.items()) >= 0.3:
+            if s.items() >= 0.85 or g.items() >= 0.3:
+                print("Expansion is needed")
 
     # Mean Decision margin
     def compute_output_decision(self, strategy: "SupervisedTemplate"):
@@ -125,6 +140,7 @@ class DENExpansionPlugin(SupervisedPlugin):
 
         return layers
 
+    # Grads Norm
     def compute_gradients_norm(self, strategy: "SupervisedTemplate"):
         layers = {}
         for name, module in strategy.model.named_modules():
@@ -133,3 +149,36 @@ class DENExpansionPlugin(SupervisedPlugin):
                 layers[name] = grads
 
         return layers
+
+    def compute_cos_grad(self, strategy: "SupervisedTemplate"):
+        model = strategy.model
+
+        grads = self.get_flat_gradients(model).detach()
+        last_grads = self.last_grads
+
+        grads, last_grads = self.match_gradients(grads, last_grads)
+
+        dot_prod = torch.dot(last_grads, grads)
+
+        norm_last = torch.norm(last_grads, p=2)
+        norm_grads = torch.norm(grads, p=2)
+
+        cg = dot_prod / (norm_last * norm_grads + 1e-8)
+
+        return cg
+
+    def get_flat_gradients(self, model: nn.Module):
+        grads = []
+
+        for p in model.parameters():
+            if p.grad is not None:
+                grads.append(p.grad.view(-1))
+
+        if grads == []:
+            return
+
+        return torch.cat(grads)
+
+    def match_gradients(self, g1: torch.Tensor, g2: torch.Tensor):
+        min_len = min(g1.numel(), g2.numel())
+        return g1[:min_len], g2[:min_len]
