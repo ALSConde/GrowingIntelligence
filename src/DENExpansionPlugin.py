@@ -51,6 +51,7 @@ class DENExpansionPlugin(SupervisedPlugin):
         self.last_grads = grads.detach()
 
     def before_update(self, strategy: "SupervisedTemplate", *args, **kwargs):
+        ec_list = []
         if self.last_grads == [] or self.last_grads is None:
             self.last_grads = self.get_flat_gradients(strategy.model)
         m = self.compute_output_decision(strategy)
@@ -65,10 +66,27 @@ class DENExpansionPlugin(SupervisedPlugin):
         print(f"\nNorma dos gradientes da Camada: {g}")
         cg = self.compute_cos_grad(strategy)
         print(f"\nCos dos gradientes da Camada: {cg}")
+        dg = self.compute_variance(strategy)
+        print(f"\nVariancia dos gradientes da Camada: {dg}")
 
-        if (1 - cg) >= 0.90 or e >= 0.2 or (1 - m) >= 0.3 or max(ec.items()) >= 0.3:
-            if s.items() >= 0.85 or g.items() >= 0.3:
-                print("Expansion is needed")
+
+        for k, v in ec.items():
+            ec_list.append(v)
+
+        if e >= 0.2 or (1 - m) >= 0.1 or max(ec_list) >= 0.3:
+            for l, v in s.items():
+                if v >= 0.85:
+                    print(f"Expansion is needed in layer {l}")
+            for l, v in g.items():
+                if v >= 0.75:
+                    print(f"Expansion is needed in layer {l}")
+            for l,v in dg.items():
+                if v >= 0.75:
+                    print(f"Expansion is needed in layer {l}")
+
+        for name, module in strategy.model.named_modules():
+            if isinstance(module, DENLayer):
+                module.reset_state()
 
     # Mean Decision margin
     def compute_output_decision(self, strategy: "SupervisedTemplate"):
@@ -106,7 +124,7 @@ class DENExpansionPlugin(SupervisedPlugin):
         log_probs = torch.log(probs + 1e-10)
         entropy = -torch.sum(probs * log_probs, dim=1)
 
-        num_classes = probs.size(1)
+        num_classes = strategy.experience.benchmark.n_classes
         max_entropy = torch.log(
             torch.tensor(num_classes, dtype=probs.dtype, device=probs.device)
         )
@@ -167,6 +185,26 @@ class DENExpansionPlugin(SupervisedPlugin):
 
         return cg
 
+    def compute_variance(self, strategy: "SupervisedTemplate"):
+        layers = {}
+
+        for name, module in strategy.model.named_modules():
+            norms = []
+            if isinstance(module, DENLayer):
+                for param in module.parameters():
+                    grads = param.grad.data.norm(2).item()
+                    norms.append(grads)
+
+                if len(norms) == 0:
+                    continue
+
+                norms_tensor = torch.tensor(norms)
+                dg = torch.var(norms_tensor, unbiased=False).item()
+
+                layers[name] = dg
+
+        return layers
+
     def get_flat_gradients(self, model: nn.Module):
         grads = []
 
@@ -182,3 +220,9 @@ class DENExpansionPlugin(SupervisedPlugin):
     def match_gradients(self, g1: torch.Tensor, g2: torch.Tensor):
         min_len = min(g1.numel(), g2.numel())
         return g1[:min_len], g2[:min_len]
+    
+    def compute_expansion(self, s, g, dg, cg, nl):
+        pass
+
+    def __auto_expand_downstream(self, model: nn.Module, layers: dict):
+        pass
