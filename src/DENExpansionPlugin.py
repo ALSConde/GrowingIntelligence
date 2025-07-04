@@ -43,6 +43,7 @@ class DENExpansionPlugin(SupervisedPlugin):
         self.n_exp = n_exp
 
         self.last_grads = None
+        self.expanded = False
 
     def before_training_epoch(self, strategy: "SupervisedTemplate"):
         grads = self.get_flat_gradients(strategy.model)
@@ -51,6 +52,7 @@ class DENExpansionPlugin(SupervisedPlugin):
         self.last_grads = grads.detach()
 
     def before_update(self, strategy: "SupervisedTemplate", *args, **kwargs):
+        self.expanded = False
         ec_list = []
         if self.last_grads == [] or self.last_grads is None:
             self.last_grads = self.get_flat_gradients(strategy.model)
@@ -69,7 +71,6 @@ class DENExpansionPlugin(SupervisedPlugin):
         dg = self.compute_variance(strategy)
         print(f"\nVariancia dos gradientes da Camada: {dg}")
 
-
         for k, v in ec.items():
             ec_list.append(v)
 
@@ -77,16 +78,22 @@ class DENExpansionPlugin(SupervisedPlugin):
             for l, v in s.items():
                 if v >= 0.85:
                     print(f"Expansion is needed in layer {l}")
+                    self.expanded = True
             for l, v in g.items():
                 if v >= 0.75:
                     print(f"Expansion is needed in layer {l}")
-            for l,v in dg.items():
+                    self.expanded = True
+            for l, v in dg.items():
                 if v >= 0.75:
                     print(f"Expansion is needed in layer {l}")
+                    self.expanded = True
 
         for name, module in strategy.model.named_modules():
             if isinstance(module, DENLayer):
                 module.reset_state()
+
+            if self.expanded:
+                module.zero_grad()
 
     # Mean Decision margin
     def compute_output_decision(self, strategy: "SupervisedTemplate"):
@@ -220,9 +227,43 @@ class DENExpansionPlugin(SupervisedPlugin):
     def match_gradients(self, g1: torch.Tensor, g2: torch.Tensor):
         min_len = min(g1.numel(), g2.numel())
         return g1[:min_len], g2[:min_len]
-    
+
     def compute_expansion(self, s, g, dg, cg, nl):
         pass
 
-    def __auto_expand_downstream(self, model: nn.Module, layers: dict):
-        pass
+    def __auto_expand_downstream(self, model: nn.Module, layer: str):
+        modules = list(model.named_modules())
+        layer_dict = dict(modules)
+
+        if layer not in layer_dict:
+            return
+
+        expanded_layer = layer_dict[layer]
+        expanded_output_dim = expanded_layer.out_features
+
+        found = False
+        for i, (name, module) in enumerate(modules):
+            if name == layer:
+                found = True
+                continue
+
+            if found and isinstance(module, nn.Linear):
+                old_linear = module
+                new_linear = nn.Linear(expanded_output_dim, old_linear.out_features)
+
+                with torch.no_grad():
+                    in_features_to_copy = min(
+                        old_linear.in_features, expanded_output_dim
+                    )
+                    new_linear.weight[:, :in_features_to_copy] = old_linear.weight[
+                        :, :in_features_to_copy
+                    ]
+                    new_linear.bias = old_linear.bias
+
+                parent = model
+                path = name.split(".")
+                for p in path[:-1]:
+                    parent = getattr(parent, p)
+                setattr(parent, path[-1], new_linear)
+                return
+
