@@ -22,6 +22,43 @@ class DENLayer(nn.Module):
         self.compute_sum_activation(x)
 
         return x
+    
+    def expand(self, n_neurons: int):
+        device = self.weights.device
+
+        n_neurons = n_neurons * self.weights.shape[0]
+
+        mean_weight = self.weights.mean(dim=0, keepdim=True)
+        new_weights = mean_weight.repeat(n_neurons, 1)
+        new_weights += torch.randn_like(new_weights) * 0.01
+
+        new_bias = torch.zeros(n_neurons, device=device)
+
+        new_weight_param = nn.Parameter(new_weights)
+        new_bias_param = nn.Parameter(new_bias)
+
+        with torch.no_grad():
+
+            old_weight = self.weights.detach()
+            old_weight.requires_grad = False
+
+            old_bias = self.bias.detach()
+            old_bias.requires_grad = False
+
+            combined_weight = torch.cat([old_weight, new_weights], dim=0)
+            combined_bias = torch.cat([old_bias, new_bias], dim=0)
+
+            self.weights = nn.Parameter(combined_weight)
+            self.bias = nn.Parameter(combined_bias)
+            self.out_features += n_neurons
+            self.active_neurons = torch.cat(
+                [self.active_neurons, torch.ones(n_neurons, device=device).bool()]
+            )
+
+            self.new_parameters = [new_weight_param, new_bias_param]
+
+        self._parameters["weight"] = self.weights
+        self._parameters["bias"] = self.bias
 
     def compute_average_gradient_norm(self):
         total_norm = 0.0

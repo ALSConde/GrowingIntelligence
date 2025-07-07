@@ -9,15 +9,13 @@ from DENLayer import DENLayer
 class DENExpansionPlugin(SupervisedPlugin):
     def __init__(
         self,
-        expansion_neurons_fn=lambda: 20,
-        expansion_fn=None,
-        lr=0.001,
         threshold=0.95,
-        neuron_fraction=0.5,
-        use_accuracy=True,
-        use_saturation=True,
         learning_type: str = "TIL",
         n_exp: int = 0,
+        alpha_factor: float = 1,
+        beta_factor: float = 1,
+        gamma_factor: float = 1,
+        scale_factor: float = 1,
     ):
 
         super().__init__()
@@ -33,14 +31,16 @@ class DENExpansionPlugin(SupervisedPlugin):
         self.learning_type = learning_type
 
         self.threshold = threshold
-        self.neuron_fraction = neuron_fraction
-        self.lr = lr
-        self.expansion_neurons_fn = expansion_neurons_fn
-        self.expansion_fn = expansion_fn
-        self.use_expansion_fn = False if self.expansion_fn is None else True
-        self.use_accuracy = use_accuracy
-        self.use_saturation = use_saturation
         self.n_exp = n_exp
+
+        self.alpha_factor = alpha_factor
+        self.beta_factor = beta_factor
+        self.gamma_factor = gamma_factor
+        self.scale_factor = scale_factor
+
+        self.ema_variance = {}
+        self.ema_var2 = {}
+        self.ema_alpha = 0.3
 
         self.last_grads = None
         self.expanded = False
@@ -78,14 +78,17 @@ class DENExpansionPlugin(SupervisedPlugin):
             for l, v in s.items():
                 if v >= 0.85:
                     print(f"Expansion is needed in layer {l}")
+                    print(f"Neurons needed: {self.compute_expansion(v, g[l], dg[l], )}")
                     self.expanded = True
             for l, v in g.items():
                 if v >= 0.75:
                     print(f"Expansion is needed in layer {l}")
+                    print(f"Neurons needed: {self.compute_expansion(v, g[l], dg[l], )}")
                     self.expanded = True
             for l, v in dg.items():
-                if v >= 0.75:
+                if v >= 0.85:
                     print(f"Expansion is needed in layer {l}")
+                    print(f"Neurons needed: {self.compute_expansion(v, g[l], dg[l], )}")
                     self.expanded = True
 
         for name, module in strategy.model.named_modules():
@@ -206,9 +209,28 @@ class DENExpansionPlugin(SupervisedPlugin):
                     continue
 
                 norms_tensor = torch.tensor(norms)
-                dg = torch.var(norms_tensor, unbiased=False).item()
+                current_var = torch.var(norms_tensor, unbiased=False).item()
 
-                layers[name] = dg
+                layers[name] = current_var
+
+                if name not in self.ema_variance:
+                    self.ema_variance[name] = current_var
+                    self.ema_var2[name] = current_var
+                else:
+                    prev_ema = self.ema_variance[name]
+                    self.ema_variance[name] = (
+                        self.ema_alpha * current_var + (1 - self.ema_alpha) * prev_ema
+                    )
+
+                    self.ema_var2[name] = (
+                        self.ema_alpha * (current_var ** 2) + (1 - self.ema_alpha) * self.ema_var2[name]
+                    )
+
+                delta = (self.ema_var2[name] - self.ema_variance[name] ** 2)**(1/2)
+                norm_var = (current_var - self.ema_variance[name]) / delta
+                norm_var = max(0.0, min(1.0, norm_var))
+
+                layers[name] = norm_var
 
         return layers
 
@@ -228,8 +250,12 @@ class DENExpansionPlugin(SupervisedPlugin):
         min_len = min(g1.numel(), g2.numel())
         return g1[:min_len], g2[:min_len]
 
-    def compute_expansion(self, s, g, dg, cg, nl):
-        pass
+    def compute_expansion(self, s, g, dg):
+        a = self.alpha_factor * (s / 0.85)
+        b = self.beta_factor * (g / 0.75)
+        c = self.gamma_factor * max((dg - 0.75) / 0.75, 0)
+        sum = int(a + b + c) * self.scale_factor
+        return sum
 
     def __auto_expand_downstream(self, model: nn.Module, layer: str):
         modules = list(model.named_modules())
@@ -266,4 +292,3 @@ class DENExpansionPlugin(SupervisedPlugin):
                     parent = getattr(parent, p)
                 setattr(parent, path[-1], new_linear)
                 return
-
