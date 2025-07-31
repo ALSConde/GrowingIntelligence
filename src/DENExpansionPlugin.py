@@ -4,6 +4,7 @@ from avalanche.training.templates import SupervisedTemplate
 import torch
 import torch.nn as nn
 from DENLayer import DENLayer
+import numpy as np
 
 
 class DENExpansionPlugin(SupervisedPlugin):
@@ -45,51 +46,171 @@ class DENExpansionPlugin(SupervisedPlugin):
         self.last_grads = None
         self.expanded = False
 
+        self.expansion_cooldown = {}
+        self.cooldown_batches = 20
+        self.cooldown_between_expansions = 5
+
+        self.layer_cap = {}
+
+    def set_cooldown_init(self, strategy: "SupervisedTemplate"):
+        for name, module in strategy.model.named_modules():
+            if isinstance(module, DENLayer):
+                self.expansion_cooldown[name] = self.cooldown_batches
+                self.layer_cap[name] = module.out_features
+
+    def set_cooldown(self, strategy: "SupervisedTemplate", layer: str, cooldown: int):
+        self.expansion_cooldown[layer] += cooldown
+
     def before_training_epoch(self, strategy: "SupervisedTemplate"):
+        if strategy.clock.train_exp_counter == 0:
+            self.set_cooldown_init(strategy)
+
+        for layer in list(self.expansion_cooldown.keys()):
+            if self.expansion_cooldown[layer] > 0:
+                self.expansion_cooldown[layer] = 0
+
         grads = self.get_flat_gradients(strategy.model)
         if grads is None:
             return
         self.last_grads = grads.detach()
 
-    def before_update(self, strategy: "SupervisedTemplate", *args, **kwargs):
+    def before_update(self, strategy: "SupervisedTemplate"):
+        if strategy.clock.train_exp_epochs == strategy.train_epochs - 1:
+            return
+
         self.expanded = False
         ec_list = []
+
         if self.last_grads == [] or self.last_grads is None:
             self.last_grads = self.get_flat_gradients(strategy.model)
+
         m = self.compute_output_decision(strategy)
         print(f"\nMargem de decisão: {m:.2f}")
         e = self.compute_global_entropy(strategy)
         print(f"\nEntropia: {e:.2f}")
         ec = self.compute_output_entropy_per_class(strategy)
-        print(f"\nEntropia media por classe: {ec}")
+        print(f"\nEntropia média por classe: {ec}")
         s = self.compute_saturated_neurons(strategy)
-        print(f"\nMedia de Saturação da Camada: {s}")
+        print(f"\nMédia de Saturação da Camada: {s}")
+        act = self.compute_activation_usage(strategy)
+        print(f"\nAtivação da Camada: {act}")
         g = self.compute_gradients_norm(strategy)
         print(f"\nNorma dos gradientes da Camada: {g}")
         cg = self.compute_cos_grad(strategy)
-        print(f"\nCos dos gradientes da Camada: {cg}")
+        print(f"\nCosseno entre gradientes: {cg}")
         dg = self.compute_variance(strategy)
-        print(f"\nVariancia dos gradientes da Camada: {dg}")
+        print(f"\nVariância normalizada dos gradientes da Camada: {dg}")
 
-        for k, v in ec.items():
+        for v in ec.values():
             ec_list.append(v)
 
-        if e >= 0.2 or (1 - m) >= 0.1 or max(ec_list) >= 0.3:
-            for l, v in s.items():
-                if v >= 0.85:
-                    print(f"Expansion is needed in layer {l}")
-                    print(f"Neurons needed: {self.compute_expansion(v, g[l], dg[l], )}")
+        if e > 0.2 or max(ec_list) > 0.3 or (1 - m) > 0.1:
+            layer_votes = {}
+            high_variance_layers = []
+
+            for name, module in strategy.model.named_modules():
+                if not isinstance(module, DENLayer):
+                    continue
+
+                if self.expansion_cooldown.get(name, 0) > 0:
+                    self.expansion_cooldown[name] -= 1
+                    continue
+
+                s_val = s.get(name, 0)
+                g_val = g.get(name, 0)
+                dg_val = dg.get(name, 0)
+
+                votes = 0
+                if s_val >= self.threshold:
+                    votes += 1
+                if g_val >= self.threshold:
+                    votes += 1
+                if dg_val >= self.threshold:
+                    votes += 1
+                    high_variance_layers.append((name, module, s_val, g_val, dg_val))
+
+                if votes > 0:
+                    layer_votes[name] = {
+                        "votes": votes,
+                        "module": module,
+                        "s": s_val,
+                        "g": g_val,
+                        "dg": dg_val,
+                    }
+
+            if layer_votes:
+                top_layer = max(layer_votes.items(), key=lambda x: x[1]["votes"])
+                for layer_name, info in layer_votes.items():
+                    if layer_name != top_layer[0]:
+                        self.set_cooldown(
+                            strategy, layer_name, self.cooldown_between_expansions
+                        )
+
+                name, info = top_layer
+                module = info["module"]
+                s_val, g_val, dg_val = info["s"], info["g"], info["dg"]
+
+                n_neurons = int(
+                    self.compute_expansion(s_val, g_val, dg_val, self.layer_cap[name])
+                )
+
+                if n_neurons > 0 and isinstance(module, DENLayer):
+                    print(
+                        f"\n[EXPANSÃO POR VOTAÇÃO] Camada {name} será expandida com {n_neurons} neurônios."
+                    )
+                    module.expand(n_neurons)
+                    params = module.new_parameters
+                    strategy.optimizer.add_param_group(
+                        {
+                            "params": params,
+                            "lr": strategy.optimizer.param_groups[0]["lr"],
+                        }
+                    )
+                    self.__auto_expand_downstream(strategy.model, name)
+                    self.expansion_cooldown[name] = self.cooldown_batches
                     self.expanded = True
-            for l, v in g.items():
-                if v >= 0.75:
-                    print(f"Expansion is needed in layer {l}")
-                    print(f"Neurons needed: {self.compute_expansion(v, g[l], dg[l], )}")
-                    self.expanded = True
-            for l, v in dg.items():
-                if v >= 0.85:
-                    print(f"Expansion is needed in layer {l}")
-                    print(f"Neurons needed: {self.compute_expansion(v, g[l], dg[l], )}")
-                    self.expanded = True
+
+            # if len(high_variance_layers) > 1:
+            #     print(
+            #         "\n[EXPANSÃO POR VARIÂNCIA] Múltiplas camadas com variância alta detectadas."
+            #     )
+            #     for name, module, s_val, g_val, dg_val in high_variance_layers:
+            #         if self.expansion_cooldown.get(name, 0) > 0:
+            #             continue
+
+            #         n_neurons = int(
+            #             self.compute_expansion(
+            #                 s_val, g_val, dg_val, module.out_features
+            #             )
+            #         )
+
+            #         n_neurons = int(
+            #             self.compute_expansion(
+            #                 s_val, g_val, dg_val, module.out_features
+            #             )
+            #         )
+            #         n_neurons = max(
+            #             self.min_expansion, min(n_neurons, self.max_expansion)
+            #         )
+
+            #         if n_neurons + module.out_features > self.max_neuron_layer:
+            #             n_neurons = self.max_neuron_layer - module.out_features
+
+            #         if n_neurons > 0 and isinstance(module, DENLayer):
+            #             print(
+            #                 f"[EXPANSÃO VARIÂNCIA] Camada {name} será expandida com {n_neurons} neurônios."
+            #             )
+            #             module.expand(n_neurons)
+            #             params = module.new_parameters
+            #             strategy.optimizer.add_param_group(
+            #                 {
+            #                     "params": params,
+            #                     "lr": strategy.optimizer.param_groups[0]["lr"],
+            #                 }
+            #             )
+            #             self.__auto_expand_downstream(strategy.model, name)
+            #             self.expansion_cooldown[name] = self.cooldown_batches
+            #             self.expanded = True
 
         for name, module in strategy.model.named_modules():
             if isinstance(module, DENLayer):
@@ -97,6 +218,53 @@ class DENExpansionPlugin(SupervisedPlugin):
 
             if self.expanded:
                 module.zero_grad()
+
+    def after_training_epoch(self, strategy: "SupervisedTemplate"):
+        if strategy.train_epochs - 2 == strategy.clock.train_exp_epochs:
+            self.prune_model(strategy)
+
+    def after_training_exp(self, strategy: "SupervisedTemplate"):
+        self.prune_model(strategy)
+        print(f"model: {strategy.model}")
+
+    def prune_model(self, strategy: "SupervisedTemplate"):
+        prune_threshold = 1e-3
+
+        print("\n[PRUNING] Iniciando poda das camadas expansíveis...")
+
+        any_pruned = False
+
+        for name, module in strategy.model.named_modules():
+            if isinstance(module, DENLayer):
+                print(f"\n[PRUNING] Analisando camada '{name}'...")
+                usage_ratio = module.get_activation_usage_ratio()
+                mean_activation = module.get_activation_mean()
+
+                if usage_ratio is None or mean_activation is None:
+                    continue
+
+                usage_ratio = usage_ratio.detach().cpu()
+                mean_activation = mean_activation.detach().cpu()
+
+                inactive_indices = torch.nonzero(
+                    (usage_ratio < prune_threshold)
+                    & (mean_activation < prune_threshold)
+                ).flatten()
+
+                if len(inactive_indices) > 0:
+                    print(
+                        f"[PRUNING] Camada '{name}' → removendo {len(inactive_indices)} neurônios."
+                    )
+                    module.prune(inactive_indices.tolist())
+                    self.__auto_expand_downstream(strategy.model, name)
+                    any_pruned = True
+
+        if any_pruned:
+            self.recreate_optimizer_with_safe_state(strategy)
+            print("[PRUNING] Otimizador atualizado com os novos parâmetros.")
+
+        else:
+            print("[PRUNING] Nenhum neurônio foi podado.")
 
     # Mean Decision margin
     def compute_output_decision(self, strategy: "SupervisedTemplate"):
@@ -168,6 +336,20 @@ class DENExpansionPlugin(SupervisedPlugin):
 
         return layers
 
+    def compute_activation_usage(self, strategy: "SupervisedTemplate", threshold=1e-3):
+        layers = {}
+        for name, module in strategy.model.named_modules():
+            if isinstance(module, DENLayer):
+                mean = module.get_activation_usage_ratio()
+
+                usage = (mean < threshold).sum().item()
+
+                total = mean.numel()
+
+                layers[name] = (usage / total, usage)
+
+        return layers
+
     # Grads Norm
     def compute_gradients_norm(self, strategy: "SupervisedTemplate"):
         layers = {}
@@ -178,6 +360,7 @@ class DENExpansionPlugin(SupervisedPlugin):
 
         return layers
 
+    # Cosine Gradient
     def compute_cos_grad(self, strategy: "SupervisedTemplate"):
         model = strategy.model
 
@@ -199,19 +382,15 @@ class DENExpansionPlugin(SupervisedPlugin):
         layers = {}
 
         for name, module in strategy.model.named_modules():
-            norms = []
             if isinstance(module, DENLayer):
-                for param in module.parameters():
-                    grads = param.grad.data.norm(2).item()
-                    norms.append(grads)
-
-                if len(norms) == 0:
+                if module.weights.grad is None:
                     continue
 
-                norms_tensor = torch.tensor(norms)
-                current_var = torch.var(norms_tensor, unbiased=False).item()
+                grads_per_neuron = module.weights.grad.data.norm(2, dim=1)
 
-                layers[name] = current_var
+                temporal_weights = module.compute_temporal_weights()
+
+                current_var = self.weighted_variance(grads_per_neuron, temporal_weights)
 
                 if name not in self.ema_variance:
                     self.ema_variance[name] = current_var
@@ -223,16 +402,25 @@ class DENExpansionPlugin(SupervisedPlugin):
                     )
 
                     self.ema_var2[name] = (
-                        self.ema_alpha * (current_var ** 2) + (1 - self.ema_alpha) * self.ema_var2[name]
+                        self.ema_alpha * (current_var**2)
+                        + (1 - self.ema_alpha) * self.ema_var2[name]
                     )
 
-                delta = (self.ema_var2[name] - self.ema_variance[name] ** 2)**(1/2)
-                norm_var = (current_var - self.ema_variance[name]) / delta
-                norm_var = max(0.0, min(1.0, norm_var))
+                delta = (self.ema_var2[name] - self.ema_variance[name] ** 2) ** 0.5
+                norm_var = abs((current_var - self.ema_variance[name]) / delta)
 
                 layers[name] = norm_var
 
         return layers
+
+    def weighted_variance(self, values: torch.Tensor, weights: torch.Tensor):
+        weights = weights.to(values.device)
+        weights = weights / weights.sum()
+
+        mean = torch.sum(weights * values)
+        variance = torch.sum(weights * (values - mean) ** 2)
+
+        return variance.item()
 
     def get_flat_gradients(self, model: nn.Module):
         grads = []
@@ -250,12 +438,22 @@ class DENExpansionPlugin(SupervisedPlugin):
         min_len = min(g1.numel(), g2.numel())
         return g1[:min_len], g2[:min_len]
 
-    def compute_expansion(self, s, g, dg):
-        a = self.alpha_factor * (s / 0.85)
-        b = self.beta_factor * (g / 0.75)
-        c = self.gamma_factor * max((dg - 0.75) / 0.75, 0)
-        sum = int(a + b + c) * self.scale_factor
+    def compute_expansion(self, s, g, dg, nl):
+        a = self.alpha_factor * (s / self.threshold)
+        b = self.beta_factor * (g / self.threshold)
+        c = self.gamma_factor * max((dg - self.threshold) / self.threshold, 0)
+        sum = (a + b + c) * self.scale_factor * nl
         return sum
+
+    def compute_lr_rate(
+        self, strategy: "SupervisedTemplate", model: nn.Module, lr: float
+    ):
+        for name, module in model.named_modules():
+            if isinstance(module, DENLayer):
+                old_params = module.old_parameters
+                new_params = module.new_parameters
+
+                delta = len(new_params) - len(old_params)
 
     def __auto_expand_downstream(self, model: nn.Module, layer: str):
         modules = list(model.named_modules())
@@ -273,22 +471,90 @@ class DENExpansionPlugin(SupervisedPlugin):
                 found = True
                 continue
 
-            if found and isinstance(module, nn.Linear):
-                old_linear = module
-                new_linear = nn.Linear(expanded_output_dim, old_linear.out_features)
+            if not found:
+                continue
+
+            if hasattr(module, "in_features"):
+                old_in_features = module.in_features
+                if old_in_features == expanded_output_dim:
+                    return
+
+                if isinstance(module, nn.Linear):
+                    new_module = nn.Linear(expanded_output_dim, module.out_features)
+                elif isinstance(module, DENLayer):
+                    new_module = DENLayer(expanded_output_dim, module.out_features)
+                else:
+                    continue
 
                 with torch.no_grad():
-                    in_features_to_copy = min(
-                        old_linear.in_features, expanded_output_dim
-                    )
-                    new_linear.weight[:, :in_features_to_copy] = old_linear.weight[
-                        :, :in_features_to_copy
-                    ]
-                    new_linear.bias = old_linear.bias
+                    in_features_to_copy = min(old_in_features, expanded_output_dim)
+
+                    if isinstance(module, nn.Linear):
+                        new_module.weight[:, :in_features_to_copy] = module.weight[
+                            :, :in_features_to_copy
+                        ]
+                        new_module.bias = module.bias
+                    elif isinstance(module, DENLayer):
+                        new_module.weights[:, :in_features_to_copy] = module.weights[
+                            :, :in_features_to_copy
+                        ]
+                        new_module.bias = module.bias
+                        new_module._last_activation_sum = module._last_activation_sum
+                        new_module._last_activation_usage = (
+                            module._last_activation_usage
+                        )
+                        new_module._activation_sum = module._activation_sum
+                        new_module._activation_usage = module._activation_usage
+                        new_module._counter = module._counter
+                        new_module._last_counter = module._last_counter
 
                 parent = model
                 path = name.split(".")
                 for p in path[:-1]:
                     parent = getattr(parent, p)
-                setattr(parent, path[-1], new_linear)
+                setattr(parent, path[-1], new_module)
                 return
+
+    def recreate_optimizer_with_safe_state(self, strategy):
+        old_optimizer = strategy.optimizer
+        optimizer_class = type(old_optimizer)
+        lr = old_optimizer.param_groups[0]["lr"]
+
+        new_optimizer = optimizer_class(strategy.model.parameters(), lr=lr)
+
+        try:
+            self.safe_restore_optimizer_state(old_optimizer, new_optimizer)
+            print(
+                "[PRUNING] Estado parcial do otimizador restaurado (parâmetros compatíveis)."
+            )
+        except Exception as e:
+            print(f"[PRUNING] Falha ao restaurar estado parcial do otimizador: {e}")
+
+        strategy.optimizer = new_optimizer
+
+    def safe_restore_optimizer_state(self, old_optimizer, new_optimizer):
+        old_state_dict = old_optimizer.state_dict()
+        old_state = old_state_dict["state"]
+
+        new_params = list(new_optimizer.param_groups[0]["params"])
+        old_params = list(old_optimizer.param_groups[0]["params"])
+
+        new_state = {}
+        param_mapping = {}
+
+        for old_p, new_p in zip(old_params, new_params):
+            if old_p.shape == new_p.shape:
+                param_mapping[old_p] = new_p
+
+        for old_p, state in old_state.items():
+            if old_p in param_mapping:
+                new_p = param_mapping[old_p]
+                new_state[new_p] = state
+
+        filtered_state_dict = {
+            "state": new_state,
+            "param_groups": new_optimizer.state_dict()["param_groups"],
+        }
+
+        new_optimizer.load_state_dict(filtered_state_dict)
+        return new_optimizer
