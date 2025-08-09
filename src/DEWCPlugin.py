@@ -197,6 +197,34 @@ class DEWCPlugin(SupervisedPlugin):
             ]
         )
 
+    def prune_neurons(self, layer_name: str, pruned_indices: Union[list, torch.Tensor]):
+        if isinstance(pruned_indices, list):
+            pruned_indices = torch.tensor(pruned_indices, dtype=torch.long)
+        else:
+            pruned_indices = pruned_indices.clone().detach()
+
+        pruned_indices = torch.unique(pruned_indices)
+
+        for t in self.saved_params.keys():
+            for param_suffix in ["weights", "bias"]:
+                key = f"{layer_name}.{param_suffix}"
+
+                for buf in [self.saved_params[t], self.importances[t]]:
+                    if key in buf:
+                        dparam = buf[key]
+                        tensor = dparam.data
+                        dim0 = tensor.size(0)
+
+                        valid_indices = pruned_indices[pruned_indices < dim0]
+                        if valid_indices.numel() == 0:
+                            continue
+
+                        mask = torch.ones(dim0, dtype=torch.bool, device=tensor.device)
+                        mask[valid_indices] = False
+
+                        dparam._data = tensor[mask]
+                        dparam.shape = dparam._data.shape
+
 
 ParamDict = Dict[str, Union[DParamData]]
 DEwcDataType = Tuple[ParamDict, ParamDict]

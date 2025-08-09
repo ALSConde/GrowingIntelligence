@@ -1,6 +1,4 @@
 from typing import Callable, Optional, Union
-
-from sympy import expand
 import torch
 
 
@@ -43,25 +41,16 @@ class DParamData(object):
     def expand(self, new_shape, padding_fn=torch.zeros):
         assert len(new_shape) == len(self.shape), "Cannot add new dimensions."
 
-        expands = [
-            i
-            for i, (snew, sold) in enumerate(zip(new_shape, self.shape))
-            if snew > sold
-        ]
+        if list(new_shape) == list(self.shape):
+            return self._data
 
-        for i, (snew, sold) in enumerate(zip(new_shape, self.shape)):
-            assert snew >= sold, f"Shape cannot decrease (dim {i}: {sold} → {snew})"
+        new_tensor = padding_fn(new_shape, device=self._data.device)
+        copy_idx = tuple(
+            slice(0, min(s_old, s_new)) for s_old, s_new in zip(self.shape, new_shape)
+        )
+        new_tensor[copy_idx] = self._data[copy_idx]
 
-        if not expands:
-            return self.data
-
-        old_data = self._data.clone()
-        old_shape = list(self.shape)
-        self.reset_like(new_shape, init_function=padding_fn)
-
-        copy_idx = [slice(s) for s in old_shape]
-        self._data[tuple(copy_idx)] = old_data
-        return self.data
+        return new_tensor
 
     @property
     def data(self) -> torch.Tensor:

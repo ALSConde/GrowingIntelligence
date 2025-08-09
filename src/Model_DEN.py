@@ -25,13 +25,13 @@ class Model_DEN_TIL(models.MultiTaskModule):
         return x
 
 
-class Model_DEN(models.DynamicModule):
+class Model_DEN_CIL(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.den_1 = DENLayer(28 * 28, 80)
-        self.linear_1 = nn.Linear(self.den_1.out_features, 400)
-        self.classifier = IncrementalClassifier(self.linear_1.out_features, 2)
+        self.den_2 = DENLayer(self.den_1.out_features, 80)
+        self.classifier = IncrementalClassifier(self.den_2.out_features, 2)
 
     def adaptation(self, experience):
         super().adaptation(experience)
@@ -39,7 +39,7 @@ class Model_DEN(models.DynamicModule):
 
     def forward(self, x):
         x = x.reshape((x.size(0), -1))
-        x = F.relu(self.den_1(x))
-        x = F.relu(self.linear_1(x))
+        x = self.den_1(x)
+        x = self.den_2(x)
         x = self.classifier(x)
         return x
