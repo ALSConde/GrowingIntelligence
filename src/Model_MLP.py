@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import avalanche.models as models
-from avalanche.models import IncrementalClassifier, MultiHeadClassifier
+from avalanche.models import IncrementalClassifier, MultiHeadClassifier, CosineIncrementalClassifier
 
 
 class Model_MLP(models.DynamicModule):

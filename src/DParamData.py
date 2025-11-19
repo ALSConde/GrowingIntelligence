@@ -39,9 +39,9 @@ class DParamData(object):
         self._data = init_function(self.shape).to(self.device)
 
     def expand(self, new_shape, padding_fn=torch.zeros):
-        assert len(new_shape) == len(self.shape), "Cannot add new dimensions."
-
-        if list(new_shape) == list(self.shape):
+        if isinstance(new_shape, int) and new_shape == self.shape:
+            return self._data
+        elif not isinstance(new_shape, int) and list(new_shape) == list(self.shape):
             return self._data
 
         new_tensor = padding_fn(new_shape, device=self._data.device)
@@ -51,6 +51,31 @@ class DParamData(object):
         new_tensor[copy_idx] = self._data[copy_idx]
 
         return new_tensor
+
+    def expand_(self, new_shape, padding_fn=torch.zeros):
+        expanded = self.expand(new_shape, padding_fn)
+        self._data.resize_(expanded.shape)
+        self._data.copy_(expanded)
+        self.shape = torch.Size(expanded.shape)
+        return self
+
+    def prune(self, indices_to_remove, dim=0):
+        if not isinstance(indices_to_remove, torch.Tensor):
+            indices_to_remove = torch.tensor(
+                indices_to_remove, dtype=torch.long, device=self._data.device
+            )
+
+        total_size = self._data.size(dim)
+        keep_mask = torch.ones(total_size, dtype=torch.bool, device=self._data.device)
+        keep_mask[indices_to_remove] = False
+
+        keep_indices = torch.arange(total_size, device=self._data.device)[keep_mask]
+
+        new_data = torch.index_select(self._data, dim, keep_indices)
+
+        self._data = new_data
+        self.shape = new_data.size()
+        return self
 
     @property
     def data(self) -> torch.Tensor:

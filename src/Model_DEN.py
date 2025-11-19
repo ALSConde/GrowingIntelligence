@@ -1,7 +1,11 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import avalanche.models as models
-from avalanche.models import IncrementalClassifier, MultiHeadClassifier
+from avalanche.models import (
+    IncrementalClassifier,
+    MultiHeadClassifier,
+    CosineIncrementalClassifier,
+)
 from DENLayer import DENLayer
 
 
@@ -11,7 +15,7 @@ class Model_DEN_TIL(models.MultiTaskModule):
 
         self.den_1 = DENLayer((28 * 28), 80)
         self.linear_1 = nn.Linear(self.den_1.out_features, 400)
-        self.classifier = MultiHeadClassifier(self.linear_1.out_features, 2)
+        self.classifier = MultiHeadClassifier(self.linear_1.out_features, 0)
 
     def adaptation(self, experience):
         super().adaptation(experience)
@@ -31,7 +35,7 @@ class Model_DEN_CIL(models.DynamicModule):
 
         self.den_1 = DENLayer(28 * 28, 80)
         self.den_2 = DENLayer(self.den_1.out_features, 80)
-        self.classifier = IncrementalClassifier(self.den_2.out_features, 2)
+        self.classifier = IncrementalClassifier(self.den_2.out_features)
 
     def adaptation(self, experience):
         super().adaptation(experience)

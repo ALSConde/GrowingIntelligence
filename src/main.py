@@ -1,184 +1,91 @@
-from torch.nn import CrossEntropyLoss
-from torch.optim import Adam
-import torchinfo
-from DENLayer import DENLayer
 import torch
-import torch.nn.utils.prune as prune
-import torch.nn as nn
-import torch.nn.functional as F
-from avalanche.models import SimpleMLP
+from torch.optim import Adam
+from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from avalanche.benchmarks import SplitMNIST
 from avalanche.training import Naive
-from avalanche.training.plugins import EvaluationPlugin, EWCPlugin, SynapticIntelligencePlugin
-from avalanche.logging import InteractiveLogger
+from avalanche.training.plugins import (
+    EvaluationPlugin,
+    EWCPlugin,
+    SynapticIntelligencePlugin,
+    MASPlugin,
+)
 from avalanche.evaluation.metrics import (
     forgetting_metrics,
     accuracy_metrics,
     loss_metrics,
-    timing_metrics,
-    cpu_usage_metrics,
-    confusion_matrix_metrics,
-    disk_usage_metrics,
+    bwt_metrics,
+    forward_transfer_metrics,
 )
-
-from DENExpansionPlugin import DENExpansionPlugin
+from avalanche.logging.interactive_logging import InteractiveLogger
+from Model_MLP import Model_MLP
 from DEWCPlugin import DEWCPlugin
-from Model_DEN import Model_DEN_CIL, Model_DEN_TIL
-from Model_MLP import Model_MLP_TIL, Model_MLP
+from DSIPlugin import DSynapticIntelligencePlugin
+from Model_DEN import Model_DEN_CIL
+from DENExpansionPlugin import DENExpansionPlugin
 
 
 def main():
-    result: dict = {}
-    for i in range(10):
-        # TIL
-        # benchmark = SplitMNIST(
-        #     5, return_task_id=True, class_ids_from_zero_in_each_exp=True
-        # )
-
-        # DIL
-        # benchmark = SplitMNIST(
-        #     5, return_task_id=False, class_ids_from_zero_in_each_exp=True
-        # )
-
-        # CIL
-        benchmark = SplitMNIST(
-            5, return_task_id=False, class_ids_from_zero_in_each_exp=False
-        )
-
-        interactive_logger = InteractiveLogger()
-
-        eval_plugin = EvaluationPlugin(
-            accuracy_metrics(minibatch=True, epoch=True, experience=True, stream=True),
-            loss_metrics(minibatch=True, epoch=True, experience=True, stream=True),
-            # timing_metrics(epoch=True, stream=True),
-            forgetting_metrics(experience=True, stream=True),
-            cpu_usage_metrics(stream=True),
-            # confusion_matrix_metrics(
-            #     num_classes=2, save_image=False, stream=True
-            # ), # For TIL and DIL
-            confusion_matrix_metrics(
-                num_classes=benchmark.n_classes, save_image=False, stream=True
-            ),  # For CIL
-            # disk_usage_metrics(
-            #     minibatch=True, epoch=True, experience=True, stream=True
-            # ),
-            loggers=[interactive_logger],
-        )
-
-        # model = Model_DEN_TIL()
-        # model = Model_MLP_TIL()
-        # model = Model_MLP()
-        model = Model_DEN_CIL()
-
-        dewc = DEWCPlugin(dewc_lambda=10e5)
-        # ewc = EWCPlugin(ewc_lambda=1000)
-
-        # den_expansion = DENExpansionPlugin(expansion_neurons_fn=lambda: 80, n_exp=benchmark.n_experiences)
-        # den_expansion = DENExpansionPlugin(expansion_neurons_fn=lambda: 80, n_exp=benchmark.n_experiences, learning_type="DIL")
-        den_expansion = DENExpansionPlugin(
-            scale_factor=0.5,
-            n_exp=benchmark.n_experiences,
-            learning_type="CIL",
-        )
-
-        cl_strategy = Naive(
-            model=model,
-            optimizer=Adam(model.parameters(), lr=0.001, betas=[0.9, 0.999]),
-            criterion=CrossEntropyLoss(),
-            train_mb_size=128,
-            train_epochs=4,
-            eval_mb_size=64,
-            # plugins=[ewc],
-            # plugins=[den_expansion],
-            plugins=[den_expansion, dewc],
-            evaluator=eval_plugin,
-        )
-
-        print(f"Starting experiment {i + 1}...")
-        results = []
-        for experience in benchmark.train_stream:
-            print("Start of experience: ", experience.current_experience)
-            print("Current Classes: ", experience.classes_in_this_experience)
-
-            # train returns a dictionary which contains all the metric values
-            res = cl_strategy.train(experience)
-            print("Training completed")
-
-            print("Computing accuracy on the whole test set")
-            # test also returns a dictionary which contains all the metric values
-            results.append(cl_strategy.eval(benchmark.test_stream))
-
-        result_iter: dict = results[-1]
-        acc = []
-        for k, v in result_iter.items():
-            if k.startswith("Top1_Acc_Exp/eval_phase/test_stream/Task"):
-                acc.append(v)
-
-        acc = sum(acc) / len(acc)
-        result[i + 1] = acc * 100
-
-        print(f"Final mean accuracy for all tasks in test set: {(acc*100):.2f}%")
-
-    print(model)
-    i = 1
-    for k, v in result.items():
-        print(f"Para a iteração {i} a acuracia media foi {v:.2f}%")
-        i += 1
-
-
-if __name__ == "__main__":
-    # main()
+    # Create the benchmark
     benchmark = SplitMNIST(
-        5, return_task_id=False, class_ids_from_zero_in_each_exp=False
+        n_experiences=5,
+        return_task_id=False,
+        fixed_class_order=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     )
 
-    den_expansion = DENExpansionPlugin(
-        scale_factor=0.5,
-        n_exp=benchmark.n_experiences,
-        learning_type="CIL",
-    )
-
+    # Create the model
     model = Model_DEN_CIL()
+    # model = Model_MLP()
+    # ewc = DEWCPlugin(dewc_lambda=1e9)
+    # ewc = EWCPlugin(ewc_lambda=1e9)
+    si = DSynapticIntelligencePlugin(si_lambda=1e9)
+    expansion_plugin = DENExpansionPlugin(
+        growth_threshold=0.95,
+        growth_factor=0.5,
+        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    )
 
-    cl_strategy = Naive(
+    # Create the optimizer and loss function
+    optimizer = Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999))
+    criterion = CrossEntropyLoss()
+
+    # Create the evaluation plugin
+    eval_plugin = EvaluationPlugin(
+        accuracy_metrics(
+            epoch=True, experience=True, stream=True, trained_experience=True
+        ),
+        loss_metrics(epoch=True, experience=True, stream=True),
+        forgetting_metrics(experience=True, stream=True),
+        bwt_metrics(experience=True, stream=True),
+        loggers=[InteractiveLogger()],
+    )
+
+    # Create the training strategy
+    strategy = Naive(
         model=model,
-        optimizer=Adam(model.parameters(), lr=0.001, betas=[0.9, 0.999]),
-        criterion=CrossEntropyLoss(),
+        optimizer=optimizer,
+        criterion=criterion,
         train_mb_size=128,
         train_epochs=4,
         eval_mb_size=64,
-        plugins=[den_expansion],
+        evaluator=eval_plugin,
+        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        plugins=[expansion_plugin, si],
+        # plugins=[expansion_plugin, ewc],
+        # plugins=[expansion_plugin],
+        # plugins=[ewc],
     )
 
-    result = []
+    # Training loop
     for experience in benchmark.train_stream:
-        print("Start of experience: ", experience.current_experience)
-        print("Current Classes: ", experience.classes_in_this_experience)
+        print(f"Start training on experience {experience.current_experience}")
+        print("Classes in this experience:", experience.classes_in_this_experience)
+        strategy.train(experience)
+        print(f"Training completed for experience {experience.current_experience}")
 
-        # train returns a dictionary which contains all the metric values
-        res = cl_strategy.train(experience)
-        print("Training completed")
+        print("Starting evaluation...")
+        strategy.eval(benchmark.test_stream)
+        print("Evaluation completed.")
 
-        print("Computing accuracy on the whole test set")
-        # test also returns a dictionary which contains all the metric values
-        result.append(cl_strategy.eval(benchmark.test_stream))
 
-    result_iter: dict = result[-1]
-    acc = []
-    for k, v in result_iter.items():
-        if k.startswith("Top1_Acc_Exp/eval_phase/test_stream/Task"):
-            acc.append(v)
-
-    acc = sum(acc) / len(acc)
-
-    print(f"Final mean accuracy for all tasks in test set: {(acc*100):.2f}%")
-    # den = DENLayer(10, 5)
-    # x = torch.randn(2, 10)
-    # y = torch.randn(2, 5)
-
-    # output = den(x)
-    # loss = F.mse_loss(output, y)
-    # loss.backward()
-
-    # print(den.weights.grad)  
-
+if __name__ == "__main__":
+    main()

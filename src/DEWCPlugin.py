@@ -149,34 +149,28 @@ class DEWCPlugin(SupervisedPlugin):
         if self.mode == "separate" or t == 0:
             self.importances[t] = importances
         elif self.mode == "online":
-            for (k1, old_imp), (k2, curr_imp) in itertools.zip_longest(
-                self.importances[t - 1].items(),
-                importances.items(),
-                fillvalue=(None, None),
-            ):
-                if k1 is None:
-                    assert k2 is not None
-                    assert curr_imp is not None
-                    self.importances[t][k2] = curr_imp
-                    continue
-
-                assert k1 == k2, "Error in importance computation."
-                assert curr_imp is not None
-                assert old_imp is not None
-                assert k2 is not None
-
-                self.importances[t][k1] = DParamData(
-                    f"imp_{k1}",
-                    curr_imp.shape,
-                    init_tensor=self.decay_factor * old_imp.expand(curr_imp.shape)
-                    + curr_imp.data,
-                    device=curr_imp.device,
-                )
-
+            for k, curr_imp in importances.items():
+                if k in self.importances[t - 1]:
+                    old_imp = self.importances[t - 1][k]
+                    new_shape = curr_imp.shape
+                    merged = (
+                        self.decay_factor * old_imp.expand(new_shape) + curr_imp.data
+                    )
+                    self.importances[t][k] = DParamData(
+                        f"imp_{k}",
+                        new_shape,
+                        init_tensor=merged,
+                        device=curr_imp.device,
+                    )
+                else:
+                    self.importances[t][k] = DParamData(
+                        f"imp_{k}",
+                        curr_imp.shape,
+                        init_tensor=torch.zeros_like(curr_imp.data),
+                        device=curr_imp.device,
+                    )
             if t > 0 and (not self.keep_importance_data):
                 del self.importances[t - 1]
-        else:
-            raise ValueError("Wrong DEWC mode.")
 
     def copy_params_dict(
         self, model: torch.nn.Module, copy_grad=False
@@ -205,7 +199,7 @@ class DEWCPlugin(SupervisedPlugin):
 
         pruned_indices = torch.unique(pruned_indices)
 
-        for t in self.saved_params.keys():
+        for t in list(self.saved_params.keys()):
             for param_suffix in ["weights", "bias"]:
                 key = f"{layer_name}.{param_suffix}"
 
@@ -221,9 +215,7 @@ class DEWCPlugin(SupervisedPlugin):
 
                         mask = torch.ones(dim0, dtype=torch.bool, device=tensor.device)
                         mask[valid_indices] = False
-
-                        dparam._data = tensor[mask]
-                        dparam.shape = dparam._data.shape
+                        dparam.prune(valid_indices, dim=0)
 
 
 ParamDict = Dict[str, Union[DParamData]]
