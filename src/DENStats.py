@@ -39,7 +39,7 @@ class DENStats:
             / 2
         }
 
-    def usage_ratio(self, threshold: float):
+    def usage_ratio(self, threshold: float = 0.05):
         if len(self.activations) == 0:
             return 0.0
         activations_tensor = torch.stack(self.activations)

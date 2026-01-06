@@ -18,6 +18,9 @@ class DENExpansionPlugin(SupervisedPlugin):
         self,
         growth_threshold: float = 0.5,
         growth_factor: float = 0.2,
+        w_loss: float = 0.7,
+        w_local: float = 0.3,
+        loss_threshold: float = 0.5,
         device: Union[str, torch.device] = "cpu",
     ):
         super().__init__()
@@ -25,61 +28,85 @@ class DENExpansionPlugin(SupervisedPlugin):
         self.growth_factor = growth_factor
         self.device = device
 
+        self.seen_classes: List[int] = []
+        self.w_loss = w_loss
+        self.w_local = w_local
+        self.loss_threshold = loss_threshold
+
     def before_training_exp(self, strategy: "SupervisedTemplate", *args, **kwargs):
+
+        self.seen_classes.extend(strategy.experience.classes_in_this_experience)
+
         if strategy.clock.train_exp_counter == 0:
             return
 
         model = strategy.model
 
-        model.eval()
-        dataset = concat_datasets([strategy.experience.dataset])
-        data = DataLoader(
-            dataset,
+        data = concat_datasets([strategy.experience.dataset])
+        dataloader = DataLoader(
+            data,
             batch_size=strategy.train_mb_size,
             shuffle=False,
-            num_workers=0,
         )
+
+        model.eval()
         with torch.no_grad():
-            for batch in data:
+            criterion = strategy._criterion
+            total_loss = 0.0
+            total_samples = 0
+            for batch in dataloader:
                 x, y, *_ = batch
                 inputs = x.to(self.device)
-                _ = model(inputs)
+                targets = y.to(self.device) if isinstance(y, torch.Tensor) else y
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
 
-            for name, module in model.named_modules():
-                if isinstance(module, DENLayer):
-                    act_mean = module.stats.get_activation_mean(self.growth_threshold)
-                    usage_ratio = module.stats.usage_ratio(self.growth_threshold)
+                total_loss += loss.item() * inputs.size(0)
+                total_samples += inputs.size(0)
 
-                    if usage_ratio < self.growth_threshold and act_mean > 0:
-                        # Improved adaptive growth decision:
-                        # - base growth proportional to current size and growth_threshold
-                        # - scale by bounded activity and unused capacity factors
-                        # - enforce sensible min/max caps to avoid explosive growth
-                        activity_factor = min(
-                            act_mean, 1.0
-                        )  # cap unexpected large activations
-                        unused_factor = max(0.0, 1.0 - usage_ratio)
-                        base = module.out_features * self.growth_factor
+            avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
 
-                        # tunable weighting of each factor
-                        activity_weight = 0.75
-                        unused_weight = 0.5
+            max_expected_loss = (
+                math.log(len(self.seen_classes)) if self.seen_classes else 0.0
+            )
+            global_loss_factor = min(avg_loss / max_expected_loss, 1.0)
 
-                        raw_growth = base * (
-                            1.0
-                            + activity_factor * activity_weight
-                            + unused_factor * unused_weight
+            if avg_loss > self.loss_threshold:
+                for name, module in model.named_modules():
+                    if isinstance(module, DENLayer):
+                        usage_ratio = module.stats.usage_ratio()
+
+                        combined_factor = (self.w_loss * global_loss_factor) + (
+                            self.w_local * usage_ratio
                         )
-                        n_new_neurons = int(round(raw_growth))
 
-                        # enforce at least one new neuron (since condition met) and cap growth to 50% of current size
-                        min_new = 1
-                        max_new = max(1, int(module.out_features * self.growth_threshold))
-                        n_new_neurons = max(min_new, min(n_new_neurons, max_new))
-                        module.expand(n_new_neurons)
-                        self.expand_model(
-                            model=model, layer_name=name, n_new_features=n_new_neurons
+                        base_growth = module.out_features * self.growth_factor
+                        n_new_neurons = int(round(base_growth * combined_factor))
+
+                        min_guaranteed = (
+                            int(module.out_features * 0.05)
+                            if global_loss_factor > 0.5
+                            else 0
                         )
+
+                        max_allowed = int(module.out_features * 0.75)
+
+                        n_new_neurons = max(
+                            min_guaranteed, min(n_new_neurons, max_allowed)
+                        )
+
+                        if n_new_neurons > 0:
+                            print(
+                                f"Expanding layer {name}: Adding {n_new_neurons} neurons (Avg Loss: {avg_loss:.4f}, Usage Ratio: {usage_ratio:.4f})"
+                            )
+                            module.expand(n_new_neurons)
+                            self.expand_model(
+                                model=model,
+                                layer_name=name,
+                                n_new_features=n_new_neurons,
+                            )
+                            self.recreate_optimizer(strategy)
+        model.train()
 
     def after_training_exp(self, strategy: "SupervisedTemplate", *args, **kwargs):
         for name, module in strategy.model.named_modules():
@@ -112,3 +139,11 @@ class DENExpansionPlugin(SupervisedPlugin):
                     break
                 else:
                     continue
+
+    def recreate_optimizer(self, strategy: "SupervisedTemplate"):
+        # Recreate optimizer to include new parameters after expansion
+        optimizer_class = type(strategy.optimizer)
+        optimizer_params = strategy.optimizer.defaults
+        strategy.optimizer = optimizer_class(
+            strategy.model.parameters(), **optimizer_params
+        )
