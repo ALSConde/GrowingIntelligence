@@ -38,7 +38,7 @@ class DENLayer(nn.Module):
             device=self.weight.device,
             dtype=self.weight.dtype,
         )
-        nn.init.kaiming_uniform_(new_weight, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(new_weight)
         self.weight = nn.Parameter(torch.cat([self.weight, new_weight], dim=0))
         if self.bias is not None:
             new_bias = torch.empty(
