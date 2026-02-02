@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from avalanche.core import SupervisedPlugin
 from avalanche.training.templates import SupervisedTemplate
 from utils.GradCAM import GradCAM
-from avalanche.logging.tensorboard_logger import SummaryWriter
 
 
 class LwMPlugin(SupervisedPlugin):
@@ -14,7 +13,6 @@ class LwMPlugin(SupervisedPlugin):
         gamma=1.0,
         temperature=2.0,
         target_layer_name=None,
-        writter: Optional[SummaryWriter] = None,
     ):
         super().__init__()
         self.beta = beta
@@ -24,29 +22,15 @@ class LwMPlugin(SupervisedPlugin):
         self.teacher_model = None
         self.gradcam_t: Optional[GradCAM] = None
         self.gradcam_s: Optional[GradCAM] = None
-        self.active_units = None
-        self.writer = writter
-        self.graph_logged = False
-
-        # buffers de perdas
-        self.losses_epoch = {"LC": [], "LD": [], "LAD": []}
-        self.epoch = 0
-        self.exp_counter = 0
 
     def before_training_exp(self, strategy: "SupervisedTemplate", **kwargs):
         """Define o modelo anterior como professor e prepara GradCAM."""
-
-        if not self.graph_logged and self.writer is not None:
-            example_input = torch.randn(1, 3, 32, 32).to(strategy.device)
-            self.writer.add_graph(strategy.model, example_input)
-            self.graph_logged = True
-
         if hasattr(strategy, "model_old"):
             self.teacher_model = getattr(strategy, "model_old")
             self.teacher_model.eval()
 
-            self.gradcam_t = self._create_gradcam(self.teacher_model)
-            self.gradcam_s = self._create_gradcam(strategy.model)
+            self.gradcam_t = self._create_gradcam(self.teacher_model, teacher=True)
+            self.gradcam_s = self._create_gradcam(strategy.model, teacher=False)
 
             active_units = getattr(self.teacher_model.classifier, "active_units", None)
 
@@ -60,10 +44,6 @@ class LwMPlugin(SupervisedPlugin):
             self.teacher_model = None
             self.active_units = None
 
-        # limpa buffers a cada nova experiência
-        if self.writer is not None:
-            self.losses_epoch = {"LC": [], "LD": [], "LAD": []}
-
     def before_backward(self, strategy: "SupervisedTemplate", **kwargs):
         """Calcula LwM = LC + βLD + γLAD."""
         if self.teacher_model is None:
@@ -72,39 +52,21 @@ class LwMPlugin(SupervisedPlugin):
         x = strategy.mb_x
         out_t = self.teacher_model(x)
 
+        if self.active_units is not None and len(self.active_units) > 0:
+            base_classes = out_t[:, self.active_units].argmax(dim=1)
+        else:
+            base_classes = out_t.argmax(dim=1)
+
         # Calcula LD e LAD
         ld = self._distillation_loss(strategy.mb_output, out_t)
         lad = 0.0
         if self.gradcam_s is not None and self.gradcam_t is not None:
-            cam_t = self.gradcam_t.compute_cam(x.detach(), self.active_units)
-            cam_s = self.gradcam_s.compute_cam(x.detach(), self.active_units)
+            cam_t = self.gradcam_t.compute_cam(x.detach(), base_classes)
+            cam_s = self.gradcam_s.compute_cam(x.detach(), base_classes)
             lad = self._attention_distillation_loss(cam_t, cam_s)
 
         # Soma ponderada
         strategy.loss += self.beta * ld + self.gamma * lad
-
-        # Armazena os valores das perdas
-        if self.writer is not None:
-            self.losses_epoch["LC"].append(strategy.loss.detach().clone().item())
-            self.losses_epoch["LD"].append(ld.item())
-            if isinstance(lad, torch.Tensor):
-                self.losses_epoch["LAD"].append(lad.item())
-
-    def after_training_epoch(self, strategy: "SupervisedTemplate", *args, **kwargs):
-        super().after_training_epoch(strategy, *args, **kwargs)
-
-        if self.writer is not None and self.teacher_model is not None:
-            for key in self.losses_epoch:
-                avg_loss = sum(self.losses_epoch[key]) / len(self.losses_epoch[key])
-                self.writer.add_scalar(
-                    f"Exp{self.exp_counter}/{key}", avg_loss, self.epoch
-                )
-            self.writer.flush()
-        self.epoch += 1
-
-    def after_training_exp(self, strategy: "SupervisedTemplate", **kwargs):
-        """Incrementa o contador de experiências."""
-        self.exp_counter += 1
 
     # ----------------- AUX -----------------
     def _distillation_loss(self, out_s, out_t: torch.Tensor) -> torch.Tensor:
@@ -129,9 +91,9 @@ class LwMPlugin(SupervisedPlugin):
         cam_s = cam_s / (torch.norm(cam_s, p=2, dim=(1, 2), keepdim=True) + 1e-8)
         return torch.abs(cam_t - cam_s).sum(dim=(1, 2)).mean()
 
-    def _create_gradcam(self, model: torch.nn.Module) -> GradCAM:
+    def _create_gradcam(self, model: torch.nn.Module, teacher: bool = False) -> GradCAM:
         target_layer = self._find_target_layer(model)
-        return GradCAM(model, target_layer)
+        return GradCAM(model, target_layer, teacher=teacher)
 
     def _find_target_layer(self, model: torch.nn.Module) -> torch.nn.Module:
         if self.target_layer_name is not None:

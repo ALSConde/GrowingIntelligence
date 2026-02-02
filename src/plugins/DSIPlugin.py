@@ -1,13 +1,12 @@
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 from avalanche.training.plugins.strategy_plugin import SupervisedPlugin
-from git import Tree
 import numpy as np
 from torch import Tensor
 import torch
 from torch.nn.modules.batchnorm import _NormBase
 from DEWCPlugin import DEwcDataType, ParamDict
-from DParamData import DParamData
+from src.utils.DParamData import DParamData
 from avalanche.training.utils import get_layers_and_params
 
 SynDataType = Dict[str, Dict[str, Union[DParamData, Tensor]]]

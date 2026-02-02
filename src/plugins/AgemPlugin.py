@@ -1,8 +1,6 @@
 from typing import Iterator, Optional
 import torch
 from torch import Tensor
-from torch.utils.data import TensorDataset
-from avalanche.benchmarks.utils import AvalancheDataset
 from avalanche.benchmarks.utils.data_loader import (
     GroupBalancedInfiniteDataLoader,
 )

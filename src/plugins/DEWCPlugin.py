@@ -7,8 +7,7 @@ from torch.utils.data import DataLoader
 from avalanche.models.utils import avalanche_forward
 from avalanche.training.plugins.strategy_plugin import SupervisedPlugin
 from avalanche.training.templates import SupervisedTemplate
-
-from DParamData import DParamData
+from src.utils.DParamData import DParamData
 
 
 class DEWCPlugin(SupervisedPlugin):

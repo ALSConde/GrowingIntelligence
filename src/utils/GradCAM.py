@@ -3,9 +3,15 @@ import torch.nn.functional as F
 
 
 class GradCAM:
-    def __init__(self, model: torch.nn.Module, target_layer: torch.nn.Module):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        target_layer: torch.nn.Module,
+        teacher: bool = False,
+    ):
         self.model = model
         self.target_layer = target_layer
+        self.teacher = teacher
 
     def forward_hook(self, module, inp, out):
         self.activations = out
@@ -17,6 +23,9 @@ class GradCAM:
         class_idx: índice da classe de interesse [B]
         """
         handle = self.target_layer.register_forward_hook(self.forward_hook)
+
+        if not self.teacher:
+            self.model.eval()
 
         outputs = self.model(x)  # [B, num_classes]
 
@@ -38,4 +47,8 @@ class GradCAM:
         cam = F.relu((weights * self.activations).sum(dim=1))  # [B, H, W]
 
         handle.remove()
+
+        if not self.teacher:
+            self.model.train()
+
         return cam

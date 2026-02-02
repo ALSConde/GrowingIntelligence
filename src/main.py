@@ -1,5 +1,4 @@
 import copy
-from pyexpat import model
 import torch
 from torch.optim import Adam
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
@@ -20,46 +19,67 @@ from avalanche.evaluation.metrics import (
     bwt_metrics,
 )
 from avalanche.logging.interactive_logging import InteractiveLogger
-from Model_MLP import Model_MLP, Model_MLP_Cifar
-from Model_DEN import Model_DEN_CIL, Model_DEN_CIL_CIFAR
-from DEWCPlugin import DEWCPlugin
-from DSIPlugin import DSynapticIntelligencePlugin
-from DENExpansionPlugin import DENExpansionPlugin
-from LwFPlugin import LwFPlugin
-from AgemPlugin import AGEMPlugin
+from avalanche.logging import CSVLogger
+from models.Model_MLP import Model_MLP, Model_MLP_Cifar, model_MLP_attention
+from models.Model_DEN import (
+    Model_DEN_CIL,
+    Model_DEN_CIL_CIFAR,
+    Model_DEN_CIL_Cifar_attention,
+    Model_DEN_CIL_attention,
+)
+from plugins.DEWCPlugin import DEWCPlugin
+from plugins.DSIPlugin import DSynapticIntelligencePlugin
+from plugins.DENExpansionPlugin import DENExpansionPlugin
+from plugins.LwFPlugin import LwFPlugin
+from plugins.AgemPlugin import AGEMPlugin
+from plugins.LwMPlugin import LwMPlugin
 
-def run_experiment():
+
+def run_experiment(seed: int = 0):
     # Create the benchmark
-    # benchmark = SplitMNIST(
-    #     n_experiences=5,
-    #     return_task_id=False,
-    #     fixed_class_order=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-    # )
-    benchmark = SplitCIFAR100(
-        n_experiences=10,
+    benchmark = SplitMNIST(
+        n_experiences=5,
         return_task_id=False,
-        fixed_class_order=list(range(100)),
+        seed=seed,
+        fixed_class_order=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     )
+    # benchmark = SplitCIFAR100(
+    #     n_experiences=10,
+    #     return_task_id=False,
+    #     fixed_class_order=list(range(100)),
+    #     seed=seed,
+    # )
 
     # Create the model
     # model = Model_DEN_CIL()
     # model = Model_MLP()
     # model = Model_MLP_Cifar()
-    model = Model_DEN_CIL_CIFAR()
+    # model = Model_DEN_CIL_CIFAR()
+    # model = Model_DEN_CIL_attention()
+    model = model_MLP_attention()
+    # model = Model_DEN_CIL_Cifar_attention()
     # ewc = DEWCPlugin(dewc_lambda=1e9)
     # ewc = EWCPlugin(ewc_lambda=1e9)
     # si = DSynapticIntelligencePlugin(si_lambda=1e9)
-    si = SynapticIntelligencePlugin(si_lambda=1e9)
+    # si = SynapticIntelligencePlugin(si_lambda=1e9)
     # agem = AGEMPlugin(memory_per_class=100, max_ref_batch_size=128)
-    # replay = ReplayPlugin(mem_size=1000,storage_policy=ClassBalancedBuffer(max_size=1000, adaptive_size=False, total_num_classes=10))
-    expansion_plugin = DENExpansionPlugin(
-        growth_factor=0.25,
-        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-    )
+    # replay = ReplayPlugin(mem_size=10000,storage_policy=ClassBalancedBuffer(max_size=10000, adaptive_size=False, total_num_classes=100))
+    # expansion_plugin = DENExpansionPlugin(
+    #     growth_factor=0.25,
+    #     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    #     Q_layer=model.den_2,
+    #     K_layer=model.den_1,
+    #     V_layer=model.den_1,
+    # )
     lwf = LwFPlugin(beta=1.0, temperature=2.0)
+    # lwm = LwMPlugin(beta=1.0, temperature=2.0)
 
     # Create the optimizer and loss function
-    optimizer = Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999))
+    optimizer = Adam(
+        model.parameters(),
+        lr=1e-3,
+        betas=(0.9, 0.999),
+    )
     criterion = CrossEntropyLoss()
 
     # Create the evaluation plugin
@@ -78,19 +98,21 @@ def run_experiment():
         model=model,
         optimizer=optimizer,
         criterion=criterion,
-        train_mb_size=256,
-        train_epochs=10,
-        eval_mb_size=128,
+        train_mb_size=128,
+        train_epochs=5,
+        eval_mb_size=64,
         evaluator=eval_plugin,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         # plugins=[expansion_plugin, ewc],
         # plugins=[expansion_plugin, si],
-        plugins=[expansion_plugin, lwf],
+        # plugins=[expansion_plugin, lwf],
+        # plugins=[expansion_plugin, lwm],
         # plugins=[expansion_plugin, replay],
         # plugins=[expansion_plugin, agem],
         # plugins=[ewc],
         # plugins=[si],
-        # plugins=[lwf],
+        plugins=[lwf],
+        # plugins=[lwm],
         # plugins=[replay],
         # plugins=[agem],
     )
@@ -103,8 +125,11 @@ def run_experiment():
         strategy.train(experience)
         # print(f"Training completed for experience {experience.current_experience}")
 
-        if any(isinstance(plugin, LwFPlugin) for plugin in strategy.plugins):
-            strategy.model_old = copy.deepcopy(strategy.model)
+        if any(
+            isinstance(plugin, LwFPlugin) or isinstance(plugin, LwMPlugin)
+            for plugin in strategy.plugins
+        ):
+            setattr(strategy, "model_old", copy.deepcopy(strategy.model))
 
         # print("Starting evaluation...")
         results = strategy.eval(benchmark.test_stream)
@@ -116,9 +141,9 @@ def run_experiment():
 def main():
     final_results = {}
 
-    for run_id in range(10):
+    for run_id in range(1):
         print(f"Run {run_id + 1}/10")
-        r = run_experiment()
+        r = run_experiment(seed=run_id + 1)
 
         # --- Acurácia final do stream ---
         final_acc = r.get("Top1_Acc_Stream/eval_phase/test_stream/Task000")

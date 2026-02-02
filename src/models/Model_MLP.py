@@ -3,6 +3,8 @@ import torch.nn.functional as F
 import avalanche.models as models
 from avalanche.models import IncrementalClassifier, MultiHeadClassifier
 
+from LinearAttention import LinearAttention
+
 
 class Model_MLP(models.DynamicModule):
     def __init__(self, *args, **kwargs):
@@ -24,6 +26,43 @@ class Model_MLP(models.DynamicModule):
         return x
 
 
+class model_MLP_attention(models.DynamicModule):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.linear_1 = nn.Linear(784, 400)
+        self.linear_2 = nn.Linear(400, 400)
+        self.attention = LinearAttention(
+            d_q=self.linear_2.out_features,
+            d_kv=self.linear_1.out_features,
+            d_att=128,
+            mem_size=32,
+        )
+        self.linear_3 = nn.Linear(128, 400)
+        self.classifier = IncrementalClassifier(self.linear_2.out_features)
+
+    def adaptation(self, experience):
+        super().adaptation(experience)
+        self.classifier.adaptation(experience=experience)
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)
+
+        h1 = F.relu(self.linear_1(x))
+        h2 = F.relu(self.linear_2(h1))
+
+        Q = h2.unsqueeze(1)  # (N, 1, D)
+
+        K = h1.unsqueeze(1)  # (N, 1, D)
+        V = h1.unsqueeze(1)  # (N, 1, D)
+
+        h_att = self.attention(Q, K, V).squeeze(1)  # (N, D)
+        h3 = self.linear_3(h_att)
+
+        x = self.classifier(h3)
+        return x
+
+
 class Model_MLP_TIL(models.MultiTaskModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -36,11 +75,11 @@ class Model_MLP_TIL(models.MultiTaskModule):
         super().adaptation(experience)
         self.classifier.adaptation(experience=experience)
 
-    def forward(self, x, task_label):
+    def forward(self, x, task_labels):
         x = x.reshape((x.size(0), -1))
         x = F.relu(self.linear_1(x))
         x = F.relu(self.linear_2(x))
-        x = self.classifier(x, task_label)
+        x = self.classifier(x, task_labels)
         return x
 
 

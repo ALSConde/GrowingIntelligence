@@ -2,14 +2,13 @@ import torch
 
 
 class DENStats:
-    def __init__(self, threshold: float = 0.5):
-        self.threshold = threshold
+    def __init__(self):
         self.history = {"activations_mean": 0.0}
         self.activations = []
 
-    def get_activation_mean(self, threshold: float):
+    def get_activation_mean(self) -> float:
         if len(self.activations) == 0:
-            return []
+            return 0.0
         activations_tensor = torch.stack(self.activations)
         mean_activations = torch.mean(activations_tensor, dim=0)
 
@@ -17,7 +16,7 @@ class DENStats:
 
     def get_indexes_of_inactive_neurons(self, threshold: float):
         if len(self.activations) == 0:
-            return []
+            return 0.0
         activations_tensor = torch.stack(self.activations)
         mean_activations = torch.mean(activations_tensor, dim=0)
         inactive_neurons = (mean_activations <= threshold).nonzero(as_tuple=True)[0]
@@ -34,12 +33,12 @@ class DENStats:
         self.history = {
             "activations_mean": (
                 self.history["activations_mean"] if "activations_mean" in self.history else 0.0
-                + self.get_activation_mean(self.threshold)
+                + self.get_activation_mean()
             )
             / 2
         }
 
-    def usage_ratio(self, threshold: float = 0.05):
+    def usage_ratio(self, threshold: float = 0.05) -> float:
         if len(self.activations) == 0:
             return 0.0
         activations_tensor = torch.stack(self.activations)
