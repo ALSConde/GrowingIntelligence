@@ -5,8 +5,8 @@ import numpy as np
 from torch import Tensor
 import torch
 from torch.nn.modules.batchnorm import _NormBase
-from DEWCPlugin import DEwcDataType, ParamDict
-from src.utils.DParamData import DParamData
+from .DEWCPlugin import DEwcDataType, ParamDict
+from utils.DParamData import DParamData
 from avalanche.training.utils import get_layers_and_params
 
 SynDataType = Dict[str, Dict[str, Union[DParamData, Tensor]]]

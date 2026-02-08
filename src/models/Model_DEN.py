@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import avalanche.models as models
@@ -6,8 +5,8 @@ from avalanche.models import (
     MultiHeadClassifier,
     IncrementalClassifier,
 )
-from DENLayer import DENLayer
-from LinearAttention import LinearAttention
+from .layers.DENLayer import DENLayer
+from .layers.LinearAttention import LinearAttention
 
 
 class Model_DEN_TIL(models.MultiTaskModule):
@@ -115,8 +114,8 @@ class Model_DEN_CIL_CIFAR(models.DynamicModule):
             128, 256, kernel_size=3, stride=2, padding=2
         )  # 6x6x128 -> 4x4x256
         self.batchnorm5 = nn.BatchNorm2d(256)
-        self.den1 = DENLayer(256 * 4 * 4, 100)
-        self.den2 = DENLayer(self.den1.out_features, 100)
+        self.den1 = DENLayer(256 * 4 * 4, 400)
+        self.den2 = DENLayer(self.den1.out_features, 400)
         self.classifier = IncrementalClassifier(
             self.den2.out_features, initial_out_features=10
         )
@@ -162,7 +161,10 @@ class Model_DEN_CIL_Cifar_attention(models.DynamicModule):
         )  # 6x6x128 -> 4x4x256
         self.batchnorm5 = nn.BatchNorm2d(256)
         self.spatial_attention = LinearAttention(
-            d_q=self.conv5.out_channels, d_kv=self.conv5.out_channels, d_att=256
+            d_q=self.conv5.out_channels,
+            d_kv=self.conv5.out_channels,
+            d_att=256,
+            mem_size=64,
         )
         self.batchnorm_att = nn.BatchNorm2d(256)
         self.den_1 = DENLayer(256 * 4 * 4, 400)
@@ -171,10 +173,11 @@ class Model_DEN_CIL_Cifar_attention(models.DynamicModule):
             d_q=self.den_2.out_features,
             d_kv=self.den_1.out_features,
             d_att=256,
+            mem_size=64,
         )
-        self.linear_1 = nn.Linear(256, 400)
+        self.den_3 = DENLayer(256, 400)
         self.classifier = IncrementalClassifier(
-            self.linear_1.out_features, initial_out_features=10
+            self.den_3.out_features, initial_out_features=10
         )
 
     def adaptation(self, experience):
@@ -199,7 +202,7 @@ class Model_DEN_CIL_Cifar_attention(models.DynamicModule):
         x = self.batchnorm_att(out + x)
 
         # ---- DEN ----
-        x = x.view(x.size(0), -1)  # (B, C*H*W)
+        x = x.reshape(x.size(0), -1)  # (B, C*H*W)
         h1 = F.relu(self.den_1(x))
         h2 = F.relu(self.den_2(h1))
 
@@ -210,6 +213,6 @@ class Model_DEN_CIL_Cifar_attention(models.DynamicModule):
         h_att = self.attention(Q, K, V).squeeze(1)
 
         # ---- Classificador ----
-        h_att = self.linear_1(h_att)
+        h_att = self.den_3(h_att)
         out = self.classifier(h_att)
         return out

@@ -20,7 +20,7 @@ from avalanche.evaluation.metrics import (
 )
 from avalanche.logging.interactive_logging import InteractiveLogger
 from avalanche.logging import CSVLogger
-from models.Model_MLP import Model_MLP, Model_MLP_Cifar, model_MLP_attention
+from models.Model_MLP import Model_MLP, Model_MLP_CIL_Cifar_attention, Model_MLP_Cifar, model_MLP_attention
 from models.Model_DEN import (
     Model_DEN_CIL,
     Model_DEN_CIL_CIFAR,
@@ -37,27 +37,28 @@ from plugins.LwMPlugin import LwMPlugin
 
 def run_experiment(seed: int = 0):
     # Create the benchmark
-    benchmark = SplitMNIST(
-        n_experiences=5,
-        return_task_id=False,
-        seed=seed,
-        fixed_class_order=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-    )
-    # benchmark = SplitCIFAR100(
-    #     n_experiences=10,
+    # benchmark = SplitMNIST(
+    #     n_experiences=5,
     #     return_task_id=False,
-    #     fixed_class_order=list(range(100)),
     #     seed=seed,
+    #     fixed_class_order=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     # )
+    benchmark = SplitCIFAR100(
+        n_experiences=10,
+        return_task_id=False,
+        fixed_class_order=list(range(100)),
+        seed=seed,
+    )
 
     # Create the model
     # model = Model_DEN_CIL()
     # model = Model_MLP()
-    # model = Model_MLP_Cifar()
+    model = Model_MLP_Cifar()
     # model = Model_DEN_CIL_CIFAR()
     # model = Model_DEN_CIL_attention()
-    model = model_MLP_attention()
+    # model = model_MLP_attention()
     # model = Model_DEN_CIL_Cifar_attention()
+    # model = Model_MLP_CIL_Cifar_attention()
     # ewc = DEWCPlugin(dewc_lambda=1e9)
     # ewc = EWCPlugin(ewc_lambda=1e9)
     # si = DSynapticIntelligencePlugin(si_lambda=1e9)
@@ -98,9 +99,9 @@ def run_experiment(seed: int = 0):
         model=model,
         optimizer=optimizer,
         criterion=criterion,
-        train_mb_size=128,
-        train_epochs=5,
-        eval_mb_size=64,
+        train_mb_size=256,
+        train_epochs=10,
+        eval_mb_size=128,
         evaluator=eval_plugin,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         # plugins=[expansion_plugin, ewc],

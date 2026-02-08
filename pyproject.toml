@@ -7,6 +7,5 @@ dependencies = [
     "avalanche-lib==0.6.0",
     "torch==2.7.0",
     "torchvision==0.22.0",
-    "tqdm==4.67.1",
     "numpy==1.26.4",
 ]

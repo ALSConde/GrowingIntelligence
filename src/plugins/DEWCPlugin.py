@@ -1,13 +1,12 @@
 from collections import defaultdict
 from typing import Dict, Tuple, Union
 import warnings
-import itertools
 import torch
 from torch.utils.data import DataLoader
 from avalanche.models.utils import avalanche_forward
 from avalanche.training.plugins.strategy_plugin import SupervisedPlugin
 from avalanche.training.templates import SupervisedTemplate
-from src.utils.DParamData import DParamData
+from utils.DParamData import DParamData
 
 
 class DEWCPlugin(SupervisedPlugin):

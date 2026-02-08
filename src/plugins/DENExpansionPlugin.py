@@ -1,16 +1,12 @@
 import math
-from pyexpat import model
-from avalanche.models import IncrementalClassifier
 from avalanche.training.plugins import SupervisedPlugin
 from avalanche.training.templates import SupervisedTemplate
 import torch
 import torch.nn as nn
-from DENLayer import DENLayer
-from DEWCPlugin import DEWCPlugin
-from typing import Optional, Union, List, Dict, Any
+from models.layers.DENLayer import DENLayer
+from typing import Optional, Union, List
 from torch.utils.data import DataLoader
-from avalanche.models.dynamic_modules import DynamicModule, MultiTaskModule
-from LinearAttention import LinearAttention
+from models.layers.LinearAttention import LinearAttention
 from avalanche.benchmarks.utils import concat_datasets
 
 
