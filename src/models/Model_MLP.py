@@ -165,7 +165,7 @@ class Model_MLP_CIL_Cifar_attention(models.DynamicModule):
             d_q=self.linear_2.out_features,
             d_kv=self.linear_1.out_features,
             d_att=256,
-            mem_size=256,
+            mem_size=64,
         )
         self.linear_3 = nn.Linear(256, 400)
         self.classifier = IncrementalClassifier(

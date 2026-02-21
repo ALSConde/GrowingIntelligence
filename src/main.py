@@ -2,7 +2,7 @@ import copy
 import torch
 from torch.optim import Adam
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
-from avalanche.benchmarks import SplitMNIST, SplitCIFAR100
+from avalanche.benchmarks import SplitMNIST, SplitCIFAR100, SplitCIFAR10
 from avalanche.training import Naive, AGEM
 from avalanche.training.plugins import (
     EvaluationPlugin,
@@ -19,7 +19,6 @@ from avalanche.evaluation.metrics import (
     bwt_metrics,
 )
 from avalanche.logging.interactive_logging import InteractiveLogger
-from avalanche.logging import CSVLogger
 from models.Model_MLP import Model_MLP, Model_MLP_CIL_Cifar_attention, Model_MLP_Cifar, model_MLP_attention
 from models.Model_DEN import (
     Model_DEN_CIL,
@@ -27,6 +26,7 @@ from models.Model_DEN import (
     Model_DEN_CIL_Cifar_attention,
     Model_DEN_CIL_attention,
 )
+from models.PreTrainedModel import model_cnn_train, model_cifar_den, model_cifar_mlp
 from plugins.DEWCPlugin import DEWCPlugin
 from plugins.DSIPlugin import DSynapticIntelligencePlugin
 from plugins.DENExpansionPlugin import DENExpansionPlugin
@@ -44,16 +44,20 @@ def run_experiment(seed: int = 0):
     #     fixed_class_order=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     # )
     benchmark = SplitCIFAR100(
-        n_experiences=10,
+        n_experiences=1,
         return_task_id=False,
         fixed_class_order=list(range(100)),
         seed=seed,
     )
+    # benchmark = SplitCIFAR10(n_experiences=1, return_task_id=False, fixed_class_order=list(range(10)), seed=seed)
 
     # Create the model
     # model = Model_DEN_CIL()
     # model = Model_MLP()
-    model = Model_MLP_Cifar()
+    # model = Model_MLP_Cifar()
+    # model = model_cnn_train()
+    # model = model_cifar_den()
+    model = model_cifar_mlp()
     # model = Model_DEN_CIL_CIFAR()
     # model = Model_DEN_CIL_attention()
     # model = model_MLP_attention()
@@ -68,17 +72,21 @@ def run_experiment(seed: int = 0):
     # expansion_plugin = DENExpansionPlugin(
     #     growth_factor=0.25,
     #     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    # )
+    # expansion_plugin = DENExpansionPlugin(
+    #     growth_factor=0.25,
+    #     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     #     Q_layer=model.den_2,
     #     K_layer=model.den_1,
     #     V_layer=model.den_1,
     # )
-    lwf = LwFPlugin(beta=1.0, temperature=2.0)
+    # lwf = LwFPlugin(beta=1.0, temperature=2.0)
     # lwm = LwMPlugin(beta=1.0, temperature=2.0)
 
     # Create the optimizer and loss function
     optimizer = Adam(
         model.parameters(),
-        lr=1e-3,
+        lr=1e-4,
         betas=(0.9, 0.999),
     )
     criterion = CrossEntropyLoss()
@@ -100,7 +108,7 @@ def run_experiment(seed: int = 0):
         optimizer=optimizer,
         criterion=criterion,
         train_mb_size=256,
-        train_epochs=10,
+        train_epochs=20,
         eval_mb_size=128,
         evaluator=eval_plugin,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
@@ -112,7 +120,7 @@ def run_experiment(seed: int = 0):
         # plugins=[expansion_plugin, agem],
         # plugins=[ewc],
         # plugins=[si],
-        plugins=[lwf],
+        # plugins=[lwf],
         # plugins=[lwm],
         # plugins=[replay],
         # plugins=[agem],
@@ -135,13 +143,15 @@ def run_experiment(seed: int = 0):
         # print("Starting evaluation...")
         results = strategy.eval(benchmark.test_stream)
         # print("Evaluation completed.")
+        
+    torch.save(model.state_dict(), "./model_cnn.pth")
 
     return results
 
 
 def main():
     final_results = {}
-
+    print("torch running on device:", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     for run_id in range(1):
         print(f"Run {run_id + 1}/10")
         r = run_experiment(seed=run_id + 1)
@@ -203,3 +213,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
