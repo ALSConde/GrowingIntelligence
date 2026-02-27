@@ -34,8 +34,8 @@ class model_cnn_train(nn.Module):
             )
         )
 
-        self.fc1 = nn.Linear(256 * 4 * 4, 400)
-        self.fc2 = nn.Linear(400, 400)
+        self.fc1 = nn.Linear(256 * 4 * 4, 2000)
+        self.fc2 = nn.Linear(2000, 2000)
         self.classifier = nn.Linear(self.fc2.out_features, 10)
 
     def forward(self, x):

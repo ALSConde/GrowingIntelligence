@@ -19,7 +19,12 @@ from avalanche.evaluation.metrics import (
     bwt_metrics,
 )
 from avalanche.logging.interactive_logging import InteractiveLogger
-from models.Model_MLP import Model_MLP, Model_MLP_CIL_Cifar_attention, Model_MLP_Cifar, model_MLP_attention
+from models.Model_MLP import (
+    Model_MLP,
+    Model_MLP_CIL_Cifar_attention,
+    Model_MLP_Cifar,
+    model_MLP_attention,
+)
 from models.Model_DEN import (
     Model_DEN_CIL,
     Model_DEN_CIL_CIFAR,
@@ -33,6 +38,7 @@ from plugins.DENExpansionPlugin import DENExpansionPlugin
 from plugins.LwFPlugin import LwFPlugin
 from plugins.AgemPlugin import AGEMPlugin
 from plugins.LwMPlugin import LwMPlugin
+import torchvision.transforms as transforms
 
 
 def run_experiment(seed: int = 0):
@@ -49,7 +55,31 @@ def run_experiment(seed: int = 0):
         fixed_class_order=list(range(100)),
         seed=seed,
     )
-    # benchmark = SplitCIFAR10(n_experiences=1, return_task_id=False, fixed_class_order=list(range(10)), seed=seed)
+
+    # transform = transforms.Compose(
+    #     [
+    #         transforms.RandomCrop(32, padding=4),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    #     ]
+    # )
+
+    # test_transform = transforms.Compose(
+    #     [
+    #         transforms.ToTensor(),
+    #         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    #     ]
+    # )
+
+    # benchmark = SplitCIFAR10(
+    #     n_experiences=1,
+    #     return_task_id=False,
+    #     fixed_class_order=list(range(10)),
+    #     seed=seed,
+    #     train_transform=transform,
+    #     eval_transform=test_transform,
+    # )
 
     # Create the model
     # model = Model_DEN_CIL()
@@ -108,7 +138,7 @@ def run_experiment(seed: int = 0):
         optimizer=optimizer,
         criterion=criterion,
         train_mb_size=256,
-        train_epochs=20,
+        train_epochs=300,
         eval_mb_size=128,
         evaluator=eval_plugin,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
@@ -143,7 +173,7 @@ def run_experiment(seed: int = 0):
         # print("Starting evaluation...")
         results = strategy.eval(benchmark.test_stream)
         # print("Evaluation completed.")
-        
+
     torch.save(model.state_dict(), "./model_cnn.pth")
 
     return results
@@ -151,8 +181,11 @@ def run_experiment(seed: int = 0):
 
 def main():
     final_results = {}
-    print("torch running on device:", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-    for run_id in range(1):
+    print(
+        "torch running on device:",
+        torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    )
+    for run_id in range(10):
         print(f"Run {run_id + 1}/10")
         r = run_experiment(seed=run_id + 1)
 
@@ -213,4 +246,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
