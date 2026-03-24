@@ -10,6 +10,7 @@ from avalanche.training.plugins import (
     SynapticIntelligencePlugin,
     MASPlugin,
     ReplayPlugin,
+    lwf
 )
 from avalanche.training.storage_policy import ClassBalancedBuffer
 from avalanche.evaluation.metrics import (

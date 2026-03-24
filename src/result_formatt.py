@@ -39,7 +39,10 @@ def format_results(results):
 
 
 def main():
-    results_dir = pathlib.Path("./results/CIFAR100_Pretrained/WD/AGEM")
+    # results_dir = pathlib.Path("./results/CIFAR100_Pretrained/MLP/AGEM")
+    # results_dir = pathlib.Path("./results/CIFAR100_Pretrained/WD/AGEM")
+    results_dir = pathlib.Path("./results/CIFAR100_Pretrained/MLP_attention/AGEM")
+    # results_dir = pathlib.Path("./results/CIFAR100_Pretrained/WD_attention/AGEM")
 
     results = format_results(get_results_json(results_dir))
     i = 1
