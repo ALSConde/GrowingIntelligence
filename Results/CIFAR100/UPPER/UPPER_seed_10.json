@@ -1,0 +1,8 @@
+{
+  "final_accuracy": 0.486,
+  "per_experience_accuracy": {
+    "Exp000": 0.486
+  },
+  "forgetting": {},
+  "bwt": {}
+}
