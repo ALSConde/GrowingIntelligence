@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from collections import OrderedDict
 import avalanche.models as models
 from avalanche.models import IncrementalClassifier
-from models.layers.DENLayer import DENLayer
+from models.layers.WDLayer import WDLayer
 from models.layers.LinearAttention import LinearAttention
 
 
@@ -47,7 +47,7 @@ class model_cnn_train(nn.Module):
         return x
 
 
-class model_cifar_den(models.DynamicModule):
+class model_cifar_we(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.extractor = model_cnn_train()
@@ -55,8 +55,8 @@ class model_cifar_den(models.DynamicModule):
         self.cnn = self.extractor.cnn
 
         self.cnn.eval()  # Set the pre-trained CNN to evaluation mode
-        self.den1 = DENLayer(256 * 4 * 4, 400)
-        self.den2 = DENLayer(self.den1.out_features, 400)
+        self.den1 = WDLayer(256 * 4 * 4, 400)
+        self.den2 = WDLayer(self.den1.out_features, 400)
         self.classifier = IncrementalClassifier(
             self.den2.out_features, initial_out_features=10
         )
@@ -155,7 +155,7 @@ class model_cifar_mlp_attention(models.DynamicModule):
         return out
 
 
-class model_cifar_den_attention(models.DynamicModule):
+class model_cifar_we_attention(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.extractor = model_cnn_train()
@@ -170,15 +170,15 @@ class model_cifar_den_attention(models.DynamicModule):
             mem_size=64,
         )
         self.batchnorm_att = nn.BatchNorm2d(256)
-        self.den_1 = DENLayer(256 * 4 * 4, 400)
-        self.den_2 = DENLayer(self.den_1.out_features, 400)
+        self.den_1 = WDLayer(256 * 4 * 4, 400)
+        self.den_2 = WDLayer(self.den_1.out_features, 400)
         self.attention = LinearAttention(
             d_q=self.den_2.out_features,
             d_kv=self.den_1.out_features,
             d_att=256,
             mem_size=64,
         )
-        self.den_3 = DENLayer(256, 400)
+        self.den_3 = WDLayer(256, 400)
         self.classifier = IncrementalClassifier(
             self.den_3.out_features, initial_out_features=10
         )

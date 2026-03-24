@@ -3,14 +3,14 @@ from avalanche.training.plugins import SupervisedPlugin
 from avalanche.training.templates import SupervisedTemplate
 import torch
 import torch.nn as nn
-from models.layers.DENLayer import DENLayer
+from models.layers.WDLayer import WDLayer
 from typing import Optional, Union, List
 from torch.utils.data import DataLoader
 from models.layers.LinearAttention import LinearAttention
 from avalanche.benchmarks.utils import concat_datasets
 
 
-class DENExpansionPlugin(SupervisedPlugin):
+class WDExpansionPlugin(SupervisedPlugin):
     def __init__(
         self,
         growth_threshold: float = 0.5,
@@ -87,7 +87,7 @@ class DENExpansionPlugin(SupervisedPlugin):
 
             if avg_loss > self.loss_threshold:
                 for name, module in model.named_modules():
-                    if isinstance(module, DENLayer):
+                    if isinstance(module, WDLayer):
                         usage_ratio = module.stats.usage_ratio()
 
                         combined_factor = (self.w_loss * global_loss_factor) + (
@@ -151,11 +151,11 @@ class DENExpansionPlugin(SupervisedPlugin):
 
     def after_training_exp(self, strategy: "SupervisedTemplate", *args, **kwargs):
         for name, module in strategy.model.named_modules():
-            if isinstance(module, DENLayer):
+            if isinstance(module, WDLayer):
                 # Reset stats after each experience
                 module.stats.reset()
 
-    # utility methods to expand input features of layers to match DENLayer expansions
+    # utility methods to expand input features of layers to match WDLayer expansions
     def expand_model(self, model: nn.Module, layer_name: str, n_new_features: int):
         next_layer_found = False
         for name, module in model.named_modules():
@@ -189,7 +189,7 @@ class DENExpansionPlugin(SupervisedPlugin):
                         torch.cat([module.weight, new_weight], dim=1)
                     )
                     break
-                elif isinstance(module, DENLayer):
+                elif isinstance(module, WDLayer):
                     module.expand_input(n_new_features)
                     break
                 else:
@@ -233,16 +233,16 @@ class DENExpansionPlugin(SupervisedPlugin):
 
         return new_proj
 
-    def expand_den_and_tied(self, model, layer_name, n_new_neurons):
+    def expand_wd_and_tied(self, model, layer_name, n_new_neurons):
         for name, module in model.named_modules():
-            if name == layer_name and isinstance(module, DENLayer):
+            if name == layer_name and isinstance(module, WDLayer):
                 module.expand(n_new_neurons)
 
                 # verifica se há camadas acopladas
                 for a, b in self.growth_together:
                     if a == layer_name:
                         tied = dict(model.named_modules())[b]
-                        if isinstance(tied, DENLayer):
+                        if isinstance(tied, WDLayer):
                             tied.expand(n_new_neurons)
 
                 return

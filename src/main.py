@@ -10,7 +10,7 @@ from avalanche.training.plugins import (
     SynapticIntelligencePlugin,
     MASPlugin,
     ReplayPlugin,
-    lwf
+    lwf,
 )
 from avalanche.training.storage_policy import ClassBalancedBuffer
 from avalanche.evaluation.metrics import (
@@ -22,20 +22,20 @@ from avalanche.evaluation.metrics import (
 from avalanche.logging.interactive_logging import InteractiveLogger
 from models.Model_MLP import (
     Model_MLP,
-    Model_MLP_CIL_Cifar_attention,
-    Model_MLP_Cifar,
+    Model_CNN_Cifar_attention,
+    Model_CNN_Cifar,
     model_MLP_attention,
 )
-from models.Model_DEN import (
-    Model_DEN_CIL,
-    Model_DEN_CIL_CIFAR,
-    Model_DEN_CIL_Cifar_attention,
-    Model_DEN_CIL_attention,
+from models.Model_WE import (
+    Model_WE_CIL,
+    Model_WE_CIL_CIFAR,
+    Model_WE_CIL_Cifar_attention,
+    Model_WE_CIL_attention,
 )
-from models.PreTrainedModel import model_cnn_train, model_cifar_den, model_cifar_mlp
+from models.PreTrainedModel import model_cnn_train, model_cifar_we, model_cifar_mlp
 from plugins.DEWCPlugin import DEWCPlugin
 from plugins.DSIPlugin import DSynapticIntelligencePlugin
-from plugins.DENExpansionPlugin import DENExpansionPlugin
+from plugins.WDExpansionPlugin import WDExpansionPlugin
 from plugins.LwFPlugin import LwFPlugin
 from plugins.AgemPlugin import AGEMPlugin
 from plugins.LwMPlugin import LwMPlugin

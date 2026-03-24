@@ -3,10 +3,10 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from typing import Optional, Union
-from .DENStats import DENStats
+from .WDStats import WDStats
 
 
-class DENLayer(nn.Module):
+class WDLayer(nn.Module):
     def __init__(
         self,
         in_features: int,
@@ -22,7 +22,7 @@ class DENLayer(nn.Module):
         self.weight = nn.Parameter(
             torch.empty((out_features, in_features), **factory_kwargs)
         )
-        self.stats: DENStats = DENStats()
+        self.stats: WDStats = WDStats()
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:

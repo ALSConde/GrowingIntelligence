@@ -2,16 +2,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import avalanche.models as models
 from avalanche.models import IncrementalClassifier
-from .layers.DENLayer import DENLayer
+from .layers.WDLayer import WDLayer
 from .layers.LinearAttention import LinearAttention
 
 
-class Model_DEN_CIL(models.DynamicModule):
+class Model_WE_CIL(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.den_1 = DENLayer(28 * 28, 400)
-        self.den_2 = DENLayer(self.den_1.out_features, 400)
+        self.den_1 = WDLayer(28 * 28, 400)
+        self.den_2 = WDLayer(self.den_1.out_features, 400)
         self.classifier = IncrementalClassifier(self.den_2.out_features)
 
     def adaptation(self, experience):
@@ -26,19 +26,19 @@ class Model_DEN_CIL(models.DynamicModule):
         return x
 
 
-class Model_DEN_CIL_attention(models.DynamicModule):
+class Model_WE_CIL_attention(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.den_1: nn.Module = DENLayer(784, 400)
-        self.den_2: nn.Module = DENLayer(400, 400)
+        self.den_1: nn.Module = WDLayer(784, 400)
+        self.den_2: nn.Module = WDLayer(400, 400)
         self.attention: nn.Module = LinearAttention(
             d_q=self.den_2.out_features,
             d_kv=self.den_1.out_features,
             d_att=128,
             mem_size=32,
         )
-        self.den_3 = DENLayer(128, 400)
+        self.den_3 = WDLayer(128, 400)
         self.classifier = IncrementalClassifier(self.den_3.out_features)
 
     def adaptation(self, experience):
@@ -67,7 +67,7 @@ class Model_DEN_CIL_attention(models.DynamicModule):
         return out
 
 
-class Model_DEN_CIL_CIFAR(models.DynamicModule):
+class Model_WE_CIL_CIFAR(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -91,8 +91,8 @@ class Model_DEN_CIL_CIFAR(models.DynamicModule):
             128, 256, kernel_size=3, stride=2, padding=2
         )  # 6x6x128 -> 4x4x256
         self.batchnorm5 = nn.BatchNorm2d(256)
-        self.den1 = DENLayer(256 * 4 * 4, 400)
-        self.den2 = DENLayer(self.den1.out_features, 400)
+        self.den1 = WDLayer(256 * 4 * 4, 400)
+        self.den2 = WDLayer(self.den1.out_features, 400)
         self.classifier = IncrementalClassifier(
             self.den2.out_features, initial_out_features=10
         )
@@ -114,7 +114,7 @@ class Model_DEN_CIL_CIFAR(models.DynamicModule):
         return x
 
 
-class Model_DEN_CIL_Cifar_attention(models.DynamicModule):
+class Model_WE_CIL_Cifar_attention(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conv1 = nn.Conv2d(
@@ -144,15 +144,15 @@ class Model_DEN_CIL_Cifar_attention(models.DynamicModule):
             mem_size=64,
         )
         self.batchnorm_att = nn.BatchNorm2d(256)
-        self.den_1 = DENLayer(256 * 4 * 4, 400)
-        self.den_2 = DENLayer(self.den_1.out_features, 400)
+        self.den_1 = WDLayer(256 * 4 * 4, 400)
+        self.den_2 = WDLayer(self.den_1.out_features, 400)
         self.attention = LinearAttention(
             d_q=self.den_2.out_features,
             d_kv=self.den_1.out_features,
             d_att=256,
             mem_size=64,
         )
-        self.den_3 = DENLayer(256, 400)
+        self.den_3 = WDLayer(256, 400)
         self.classifier = IncrementalClassifier(
             self.den_3.out_features, initial_out_features=10
         )

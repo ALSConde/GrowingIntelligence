@@ -63,7 +63,7 @@ class model_MLP_attention(models.DynamicModule):
 
 
 
-class Model_MLP_Cifar(models.DynamicModule):
+class Model_CNN_Cifar(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -110,7 +110,7 @@ class Model_MLP_Cifar(models.DynamicModule):
         return x
 
 
-class Model_MLP_CIL_Cifar_attention(models.DynamicModule):
+class Model_CNN_Cifar_attention(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conv1 = nn.Conv2d(

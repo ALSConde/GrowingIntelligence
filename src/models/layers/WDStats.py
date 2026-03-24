@@ -1,7 +1,7 @@
 import torch
 
 
-class DENStats:
+class WDStats:
     def __init__(self):
         self.history = {"activations_mean": 0.0}
         self.activations = []
