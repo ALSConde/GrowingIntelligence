@@ -49,14 +49,14 @@ class LwFPlugin(SupervisedPlugin):
     def _distillation_loss(self, out_s, out_t):
         T = self.temperature
 
-        p = F.softmax(out_t / T, dim=1)
-        q = F.log_softmax(out_s / T, dim=1)
+        q = F.softmax(out_t / T, dim=1)
+        log_p = F.log_softmax(out_s / T, dim=1)
 
         if self.active_units is not None:
-            p_old = p[:, self.active_units]
-            q_old = q[:, self.active_units]
+            q = q[:, self.active_units]
+            log_p = log_p[:, self.active_units]
 
         else:
-            p_old, q_old = p, q
+            q, log_p = q, log_p
 
-        return F.kl_div(q_old, p_old, reduction="batchmean") * (T**2)
+        return F.kl_div(log_p, q, reduction="batchmean") * (T**2)
