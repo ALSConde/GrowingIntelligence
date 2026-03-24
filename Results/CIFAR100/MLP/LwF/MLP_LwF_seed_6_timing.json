@@ -1,0 +1,48 @@
+{
+  "model": "MLP",
+  "plugin": "LwF",
+  "seed": 6,
+  "num_workers": 8,
+  "experiences": {
+    "0": {
+      "mean_batch_loading_time_ms": 23.620686358546774,
+      "num_batches": 599
+    },
+    "1": {
+      "mean_batch_loading_time_ms": 22.9023645487373,
+      "num_batches": 599
+    },
+    "2": {
+      "mean_batch_loading_time_ms": 23.000936193363696,
+      "num_batches": 599
+    },
+    "3": {
+      "mean_batch_loading_time_ms": 23.249734287929158,
+      "num_batches": 599
+    },
+    "4": {
+      "mean_batch_loading_time_ms": 23.471714098485364,
+      "num_batches": 599
+    },
+    "5": {
+      "mean_batch_loading_time_ms": 23.32166452676008,
+      "num_batches": 599
+    },
+    "6": {
+      "mean_batch_loading_time_ms": 23.54119238420351,
+      "num_batches": 599
+    },
+    "7": {
+      "mean_batch_loading_time_ms": 23.226584951534793,
+      "num_batches": 599
+    },
+    "8": {
+      "mean_batch_loading_time_ms": 23.52859429666813,
+      "num_batches": 599
+    },
+    "9": {
+      "mean_batch_loading_time_ms": 24.008533783655036,
+      "num_batches": 599
+    }
+  }
+}

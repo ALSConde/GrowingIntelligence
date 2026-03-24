@@ -1,0 +1,48 @@
+{
+  "model": "DEN",
+  "plugin": "LwF",
+  "seed": 2,
+  "num_workers": 8,
+  "experiences": {
+    "0": {
+      "mean_batch_loading_time_ms": 22.981957997349348,
+      "num_batches": 599
+    },
+    "1": {
+      "mean_batch_loading_time_ms": 21.562427378730703,
+      "num_batches": 599
+    },
+    "2": {
+      "mean_batch_loading_time_ms": 22.52823718277759,
+      "num_batches": 599
+    },
+    "3": {
+      "mean_batch_loading_time_ms": 21.368395440740656,
+      "num_batches": 599
+    },
+    "4": {
+      "mean_batch_loading_time_ms": 22.44268050059701,
+      "num_batches": 599
+    },
+    "5": {
+      "mean_batch_loading_time_ms": 22.237489170990326,
+      "num_batches": 599
+    },
+    "6": {
+      "mean_batch_loading_time_ms": 20.95821858515873,
+      "num_batches": 599
+    },
+    "7": {
+      "mean_batch_loading_time_ms": 21.589194485087425,
+      "num_batches": 599
+    },
+    "8": {
+      "mean_batch_loading_time_ms": 22.5913166542707,
+      "num_batches": 599
+    },
+    "9": {
+      "mean_batch_loading_time_ms": 23.094205066051725,
+      "num_batches": 599
+    }
+  }
+}

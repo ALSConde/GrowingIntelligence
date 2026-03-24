@@ -1,120 +1,248 @@
-from torch.nn import CrossEntropyLoss
+import copy
+import torch
 from torch.optim import Adam
-import torchinfo
-from avalanche.models import SimpleMLP
-from avalanche.benchmarks import SplitMNIST
-from avalanche.training import Naive
-from avalanche.training.plugins import EvaluationPlugin, EWCPlugin
-from avalanche.logging import InteractiveLogger
+from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
+from avalanche.benchmarks import SplitMNIST, SplitCIFAR100, SplitCIFAR10
+from avalanche.training import Naive, AGEM
+from avalanche.training.plugins import (
+    EvaluationPlugin,
+    EWCPlugin,
+    SynapticIntelligencePlugin,
+    MASPlugin,
+    ReplayPlugin,
+    lwf
+)
+from avalanche.training.storage_policy import ClassBalancedBuffer
 from avalanche.evaluation.metrics import (
     forgetting_metrics,
     accuracy_metrics,
     loss_metrics,
-    timing_metrics,
-    cpu_usage_metrics,
-    confusion_matrix_metrics,
-    disk_usage_metrics,
+    bwt_metrics,
 )
+from avalanche.logging.interactive_logging import InteractiveLogger
+from models.Model_MLP import (
+    Model_MLP,
+    Model_MLP_CIL_Cifar_attention,
+    Model_MLP_Cifar,
+    model_MLP_attention,
+)
+from models.Model_DEN import (
+    Model_DEN_CIL,
+    Model_DEN_CIL_CIFAR,
+    Model_DEN_CIL_Cifar_attention,
+    Model_DEN_CIL_attention,
+)
+from models.PreTrainedModel import model_cnn_train, model_cifar_den, model_cifar_mlp
+from plugins.DEWCPlugin import DEWCPlugin
+from plugins.DSIPlugin import DSynapticIntelligencePlugin
+from plugins.DENExpansionPlugin import DENExpansionPlugin
+from plugins.LwFPlugin import LwFPlugin
+from plugins.AgemPlugin import AGEMPlugin
+from plugins.LwMPlugin import LwMPlugin
+import torchvision.transforms as transforms
 
-from DENExpansionPlugin import DENExpansionPlugin
-from DEWCPlugin import DEWCPlugin
-from Model_DEN import Model_DEN, Model_DEN_TIL
-from Model_MLP import Model_MLP_TIL, Model_MLP
+
+def run_experiment(seed: int = 0):
+    # Create the benchmark
+    # benchmark = SplitMNIST(
+    #     n_experiences=5,
+    #     return_task_id=False,
+    #     seed=seed,
+    #     fixed_class_order=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    # )
+    benchmark = SplitCIFAR100(
+        n_experiences=1,
+        return_task_id=False,
+        fixed_class_order=list(range(100)),
+        seed=seed,
+    )
+
+    # transform = transforms.Compose(
+    #     [
+    #         transforms.RandomCrop(32, padding=4),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.ToTensor(),
+    #         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    #     ]
+    # )
+
+    # test_transform = transforms.Compose(
+    #     [
+    #         transforms.ToTensor(),
+    #         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    #     ]
+    # )
+
+    # benchmark = SplitCIFAR10(
+    #     n_experiences=1,
+    #     return_task_id=False,
+    #     fixed_class_order=list(range(10)),
+    #     seed=seed,
+    #     train_transform=transform,
+    #     eval_transform=test_transform,
+    # )
+
+    # Create the model
+    # model = Model_DEN_CIL()
+    # model = Model_MLP()
+    # model = Model_MLP_Cifar()
+    # model = model_cnn_train()
+    # model = model_cifar_den()
+    model = model_cifar_mlp()
+    # model = Model_DEN_CIL_CIFAR()
+    # model = Model_DEN_CIL_attention()
+    # model = model_MLP_attention()
+    # model = Model_DEN_CIL_Cifar_attention()
+    # model = Model_MLP_CIL_Cifar_attention()
+    # ewc = DEWCPlugin(dewc_lambda=1e9)
+    # ewc = EWCPlugin(ewc_lambda=1e9)
+    # si = DSynapticIntelligencePlugin(si_lambda=1e9)
+    # si = SynapticIntelligencePlugin(si_lambda=1e9)
+    # agem = AGEMPlugin(memory_per_class=100, max_ref_batch_size=128)
+    # replay = ReplayPlugin(mem_size=10000,storage_policy=ClassBalancedBuffer(max_size=10000, adaptive_size=False, total_num_classes=100))
+    # expansion_plugin = DENExpansionPlugin(
+    #     growth_factor=0.25,
+    #     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    # )
+    # expansion_plugin = DENExpansionPlugin(
+    #     growth_factor=0.25,
+    #     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    #     Q_layer=model.den_2,
+    #     K_layer=model.den_1,
+    #     V_layer=model.den_1,
+    # )
+    # lwf = LwFPlugin(beta=1.0, temperature=2.0)
+    # lwm = LwMPlugin(beta=1.0, temperature=2.0)
+
+    # Create the optimizer and loss function
+    optimizer = Adam(
+        model.parameters(),
+        lr=1e-4,
+        betas=(0.9, 0.999),
+    )
+    criterion = CrossEntropyLoss()
+
+    # Create the evaluation plugin
+    eval_plugin = EvaluationPlugin(
+        accuracy_metrics(
+            epoch=True, experience=True, stream=True, trained_experience=True
+        ),
+        loss_metrics(epoch=True, experience=True, stream=True),
+        forgetting_metrics(experience=True, stream=True),
+        bwt_metrics(experience=True, stream=True),
+        loggers=[InteractiveLogger()],
+    )
+
+    # Create the training strategy
+    strategy = Naive(
+        model=model,
+        optimizer=optimizer,
+        criterion=criterion,
+        train_mb_size=256,
+        train_epochs=300,
+        eval_mb_size=128,
+        evaluator=eval_plugin,
+        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        # plugins=[expansion_plugin, ewc],
+        # plugins=[expansion_plugin, si],
+        # plugins=[expansion_plugin, lwf],
+        # plugins=[expansion_plugin, lwm],
+        # plugins=[expansion_plugin, replay],
+        # plugins=[expansion_plugin, agem],
+        # plugins=[ewc],
+        # plugins=[si],
+        # plugins=[lwf],
+        # plugins=[lwm],
+        # plugins=[replay],
+        # plugins=[agem],
+    )
+
+    # Training loop
+    results: dict = {}
+    for experience in benchmark.train_stream:
+        # print(f"Start training on experience {experience.current_experience}")
+        # print("Classes in this experience:", experience.classes_in_this_experience)
+        strategy.train(experience)
+        # print(f"Training completed for experience {experience.current_experience}")
+
+        if any(
+            isinstance(plugin, LwFPlugin) or isinstance(plugin, LwMPlugin)
+            for plugin in strategy.plugins
+        ):
+            setattr(strategy, "model_old", copy.deepcopy(strategy.model))
+
+        # print("Starting evaluation...")
+        results = strategy.eval(benchmark.test_stream)
+        # print("Evaluation completed.")
+
+    torch.save(model.state_dict(), "./model_cnn.pth")
+
+    return results
 
 
 def main():
-    result: dict = {}
-    for i in range(10):
-        # TIL
-        # benchmark = SplitMNIST(
-        #     5, return_task_id=True, class_ids_from_zero_in_each_exp=True
-        # )
+    final_results = {}
+    print(
+        "torch running on device:",
+        torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    )
+    for run_id in range(10):
+        print(f"Run {run_id + 1}/10")
+        r = run_experiment(seed=run_id + 1)
 
-        # DIL
-        # benchmark = SplitMNIST(
-        #     5, return_task_id=False, class_ids_from_zero_in_each_exp=True
-        # )
+        # --- Acurácia final do stream ---
+        final_acc = r.get("Top1_Acc_Stream/eval_phase/test_stream/Task000")
 
-        # CIL
-        benchmark = SplitMNIST(
-            5, return_task_id=False, class_ids_from_zero_in_each_exp=False
-        )
+        # --- Acurácia por experiência ---
+        exp_acc = {
+            k.split("/")[-1]: v
+            for k, v in r.items()
+            if k.startswith("Top1_Acc_Exp/eval_phase/test_stream/")
+        }
 
-        interactive_logger = InteractiveLogger()
+        # --- Forgetting por experiência ---
+        exp_forgetting = {
+            k.split("/")[-1]: v
+            for k, v in r.items()
+            if k.startswith("ExperienceForgetting/eval_phase/test_stream/")
+        }
 
-        eval_plugin = EvaluationPlugin(
-            accuracy_metrics(minibatch=True, epoch=True, experience=True, stream=True),
-            loss_metrics(minibatch=True, epoch=True, experience=True, stream=True),
-            timing_metrics(epoch=True, stream=True),
-            forgetting_metrics(experience=True, stream=True),
-            cpu_usage_metrics(stream=True),
-            # confusion_matrix_metrics(
-            #     num_classes=2, save_image=False, stream=True
-            # ), # For TIL and DIL
-            confusion_matrix_metrics(
-                num_classes=benchmark.n_classes, save_image=False, stream=True
-            ), # For CIL
-            disk_usage_metrics(
-                minibatch=True, epoch=True, experience=True, stream=True
-            ),
-            loggers=[interactive_logger],
-        )
+        # --- BWT por experiência ---
+        exp_bwt = {
+            k.split("/")[-1]: v
+            for k, v in r.items()
+            if k.startswith("ExperienceBWT/eval_phase/test_stream/")
+        }
 
-        # model = Model_DEN_TIL()
-        # model = Model_MLP_TIL()
-        # model = Model_MLP()
-        model = Model_DEN()
+        def sort_exp(d):
+            return dict(sorted(d.items(), key=lambda x: int(x[0].replace("Exp", ""))))
 
-        dewc = DEWCPlugin(dewc_lambda=1000)
-        # ewc = EWCPlugin(ewc_lambda=1000)
-        
-        # den_expansion = DENExpansionPlugin(expansion_neurons_fn=lambda: 80, n_exp=benchmark.n_experiences)
-        # den_expansion = DENExpansionPlugin(expansion_neurons_fn=lambda: 80, n_exp=benchmark.n_experiences, learning_type="DIL")
-        den_expansion = DENExpansionPlugin(expansion_neurons_fn=lambda: 80, n_exp=benchmark.n_experiences, learning_type="CIL")
+        exp_acc = sort_exp(exp_acc)
+        exp_forgetting = sort_exp(exp_forgetting)
+        exp_bwt = sort_exp(exp_bwt)
 
-        cl_strategy = Naive(
-            model=model,
-            optimizer=Adam(model.parameters(), lr=0.001, betas=[0.9, 0.999]),
-            criterion=CrossEntropyLoss(),
-            train_mb_size=128,
-            train_epochs=4,
-            eval_mb_size=64,
-            # plugins=[ewc],
-            # plugins=[den_expansion],
-            plugins=[den_expansion, dewc],
-            evaluator=eval_plugin,
-        )
+        final_results[run_id] = {
+            "final_accuracy": final_acc,
+            "per_experience_accuracy": exp_acc,
+            "forgetting": exp_forgetting,
+            "bwt": exp_bwt,
+        }
 
-        print(f"Starting experiment {i + 1}...")
-        results = []
-        for experience in benchmark.train_stream:
-            print("Start of experience: ", experience.current_experience)
-            print("Current Classes: ", experience.classes_in_this_experience)
+    for run_id, data in final_results.items():
+        print(f"\nRun {run_id + 1}")
+        print(f"  Final Accuracy: {data['final_accuracy'] * 100:.2f}%")
 
-            # train returns a dictionary which contains all the metric values
-            res = cl_strategy.train(experience)
-            print("Training completed")
+        print("  Per-experience accuracy:")
+        for exp, acc in data["per_experience_accuracy"].items():
+            print(f"    {exp}: {acc * 100:.2f}%")
 
-            print("Computing accuracy on the whole test set")
-            # test also returns a dictionary which contains all the metric values
-            results.append(cl_strategy.eval(benchmark.test_stream))
+        print("  Forgetting:")
+        for exp, val in data["forgetting"].items():
+            print(f"    {exp}: {val:.4f}")
 
-        result_iter: dict = results[-1]
-        acc = []
-        for k, v in result_iter.items():
-            if k.startswith("Top1_Acc_Exp/eval_phase/test_stream/Task"):
-                acc.append(v)
-
-        acc = sum(acc) / len(acc)
-        result[i + 1] = acc * 100
-
-        print(f"Final mean accuracy for all tasks in test set: {(acc*100):.2f}%")
-
-    print(model)
-    i = 1
-    for k, v in result.items():
-        print(f"Para a iteração {i} a acuracia media foi {v:.2f}%")
-        i += 1
+        print("  BWT:")
+        for exp, val in data["bwt"].items():
+            print(f"    {exp}: {val:.4f}")
 
 
 if __name__ == "__main__":
