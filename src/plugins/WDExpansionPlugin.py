@@ -122,7 +122,7 @@ class WDExpansionPlugin(SupervisedPlugin):
                             )
                             for layer_a, layer_b in self.growth_together:
                                 if name == layer_a:
-                                    self.expand_den_and_tied(
+                                    self.expand_wd_and_tied(
                                         model=model,
                                         layer_name=name,
                                         n_new_neurons=n_new_neurons,

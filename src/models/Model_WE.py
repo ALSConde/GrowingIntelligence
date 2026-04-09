@@ -10,9 +10,9 @@ class Model_WE_CIL(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.den_1 = WDLayer(28 * 28, 400)
-        self.den_2 = WDLayer(self.den_1.out_features, 400)
-        self.classifier = IncrementalClassifier(self.den_2.out_features)
+        self.wd_1 = WDLayer(28 * 28, 400)
+        self.wd_2 = WDLayer(self.wd_1.out_features, 400)
+        self.classifier = IncrementalClassifier(self.wd_2.out_features)
 
     def adaptation(self, experience):
         super().adaptation(experience)
@@ -20,8 +20,8 @@ class Model_WE_CIL(models.DynamicModule):
 
     def forward(self, x):
         x = x.reshape((x.size(0), -1))
-        x = self.den_1(x)
-        x = self.den_2(x)
+        x = self.wd_1(x)
+        x = self.wd_2(x)
         x = self.classifier(x)
         return x
 
@@ -30,16 +30,16 @@ class Model_WE_CIL_attention(models.DynamicModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.den_1: nn.Module = WDLayer(784, 400)
-        self.den_2: nn.Module = WDLayer(400, 400)
+        self.wd_1: nn.Module = WDLayer(784, 400)
+        self.wd_2: nn.Module = WDLayer(400, 400)
         self.attention: nn.Module = LinearAttention(
-            d_q=self.den_2.out_features,
-            d_kv=self.den_1.out_features,
+            d_q=self.wd_2.out_features,
+            d_kv=self.wd_1.out_features,
             d_att=128,
             mem_size=32,
         )
-        self.den_3 = WDLayer(128, 400)
-        self.classifier = IncrementalClassifier(self.den_3.out_features)
+        self.wd_3 = WDLayer(128, 400)
+        self.classifier = IncrementalClassifier(self.wd_3.out_features)
 
     def adaptation(self, experience):
         super().adaptation(experience)
@@ -48,8 +48,8 @@ class Model_WE_CIL_attention(models.DynamicModule):
     def forward(self, x):
         x = x.view(x.size(0), -1)
 
-        h1 = F.relu(self.den_1(x))  # (N, D1)
-        h2 = F.relu(self.den_2(h1))  # (N, D2)
+        h1 = F.relu(self.wd_1(x))  # (N, D1)
+        h2 = F.relu(self.wd_2(h1))  # (N, D2)
 
         # ---- Atenção ----
         # Q: batch atual
@@ -61,7 +61,7 @@ class Model_WE_CIL_attention(models.DynamicModule):
 
         # Atenção linear com memoria interna (k_mem, v_mem) como pesos treinaveis adicionados a K e V
         h_att = self.attention(Q, K, V).squeeze(1)  # (N, D)
-        h3 = self.den_3(h_att)
+        h3 = self.wd_3(h_att)
 
         out = self.classifier(h3)
         return out
@@ -144,17 +144,17 @@ class Model_WE_CIL_Cifar_attention(models.DynamicModule):
             mem_size=64,
         )
         self.batchnorm_att = nn.BatchNorm2d(256)
-        self.den_1 = WDLayer(256 * 4 * 4, 400)
-        self.den_2 = WDLayer(self.den_1.out_features, 400)
+        self.wd_1 = WDLayer(256 * 4 * 4, 400)
+        self.wd_2 = WDLayer(self.wd_1.out_features, 400)
         self.attention = LinearAttention(
-            d_q=self.den_2.out_features,
-            d_kv=self.den_1.out_features,
+            d_q=self.wd_2.out_features,
+            d_kv=self.wd_1.out_features,
             d_att=256,
             mem_size=64,
         )
-        self.den_3 = WDLayer(256, 400)
+        self.wd_3 = WDLayer(256, 400)
         self.classifier = IncrementalClassifier(
-            self.den_3.out_features, initial_out_features=10
+            self.wd_3.out_features, initial_out_features=10
         )
 
     def adaptation(self, experience):
@@ -180,8 +180,8 @@ class Model_WE_CIL_Cifar_attention(models.DynamicModule):
 
         # ---- DEN ----
         x = x.reshape(x.size(0), -1)  # (B, C*H*W)
-        h1 = F.relu(self.den_1(x))
-        h2 = F.relu(self.den_2(h1))
+        h1 = F.relu(self.wd_1(x))
+        h2 = F.relu(self.wd_2(h1))
 
         # ---- Atenção como memória curta ----
         Q = h2.unsqueeze(1)
@@ -190,6 +190,6 @@ class Model_WE_CIL_Cifar_attention(models.DynamicModule):
         h_att = self.attention(Q, K, V).squeeze(1)
 
         # ---- Classificador ----
-        h_att = self.den_3(h_att)
+        h_att = self.wd_3(h_att)
         out = self.classifier(h_att)
         return out
