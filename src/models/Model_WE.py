@@ -178,7 +178,7 @@ class Model_WE_CIL_Cifar_attention(models.DynamicModule):
         out = res.permute(0, 2, 1).view(B, C, H, W)
         x = self.batchnorm_att(out + x)
 
-        # ---- DEN ----
+        # ---- WD ----
         x = x.reshape(x.size(0), -1)  # (B, C*H*W)
         h1 = F.relu(self.wd_1(x))
         h2 = F.relu(self.wd_2(h1))
