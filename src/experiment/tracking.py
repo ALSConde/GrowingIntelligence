@@ -49,6 +49,8 @@ def describe_model(model) -> dict:
     }
     if widths:
         d["wd_widths"] = widths
+    if isinstance(getattr(model, "widths", None), list):
+        d["widths"] = list(model.widths)
     if hasattr(model, "prune_report"):
         d["der"] = model.prune_report()
     return d

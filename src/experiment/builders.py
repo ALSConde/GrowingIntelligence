@@ -20,6 +20,7 @@ from avalanche.training.storage_policy import ClassBalancedBuffer
 MEMORY_FREE = {"naive", "ewc", "si", "lwf", "lwm", "joint"}
 DER_FAMILY = {"der", "orth_der"}
 WE_ARCHS = {"we", "we_att"}
+ECNN_ARCHS = {"ecnn", "we2", "we2_fc"}  # CNN com largura ajustável (ver Model_ECNN.py)
 
 
 def method_tag(args) -> str:
@@ -54,6 +55,10 @@ def build_model(args, benchmark):
             initial_out_features=benchmark.n_classes // benchmark.n_experiences,
             prune=args.prune,
         )
+    if args.arch in ECNN_ARCHS:
+        from models.Model_ECNN import ExpandableCNN
+
+        return ExpandableCNN(width_mult=args.width_mult)
     from models.Model_MLP import Model_CNN_Cifar, Model_CNN_Cifar_attention
     from models.Model_WE import Model_WE_CIL_CIFAR, Model_WE_CIL_Cifar_attention
 
@@ -75,8 +80,26 @@ def build_plugins(args, model, device, n_classes):
     from plugins.WDExpansionPlugin import WDExpansionPlugin
 
     plugins = []
-    dynamic = args.strategy not in DER_FAMILY and args.arch in WE_ARCHS
-    if dynamic:
+    dynamic = args.strategy not in DER_FAMILY and (
+        args.arch in WE_ARCHS or args.arch in ("we2", "we2_fc")
+    )
+    if args.strategy not in DER_FAMILY and args.arch in ("we2", "we2_fc"):
+        from plugins.BudgetedExpansionPlugin import BudgetedExpansionPlugin
+
+        plugins.append(
+            BudgetedExpansionPlugin(
+                layers="all" if args.arch == "we2" else "fc",
+                need_signal=args.need_signal,
+                budget_per_step=args.budget_per_step,
+                loss_threshold=args.loss_threshold,
+                max_growth_frac=args.max_growth_frac,
+                max_width_factor=args.max_width_factor,
+                stats_images=args.stats_images,
+                device=device,
+                verbose=not args.quiet,
+            )
+        )
+    elif dynamic:
         kw = dict(
             growth_threshold=args.growth_threshold,
             growth_factor=args.growth_factor,

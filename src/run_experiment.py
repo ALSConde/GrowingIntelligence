@@ -48,9 +48,11 @@ def get_args(argv=None):
     )
     p.add_argument(
         "--arch",
-        choices=["cnn", "we", "cnn_att", "we_att"],
+        choices=["cnn", "we", "cnn_att", "we_att", "ecnn", "we2", "we2_fc"],
         default="cnn",
-        help="cnn=baseline, we=Width Expansion, cnn_att=só atenção, we_att=WE+Atenção",
+        help="cnn=baseline, we=Width Expansion, cnn_att=só atenção, we_att=WE+Atenção; "
+        "ecnn=CNN de largura ajustável (--width_mult), we2=expansão com orçamento "
+        "(conv+FC), we2_fc=expansão com orçamento só nas FC",
     )
     p.add_argument(
         "--strategy",
@@ -115,6 +117,25 @@ def get_args(argv=None):
     p.add_argument("--w_local", type=float, default=0.3)
     p.add_argument("--limited_expansion", action="store_true")
     p.add_argument("--capacity_limit", type=int, default=400)
+    # expansão com orçamento (we2 / we2_fc) e baseline de capacidade igualada (ecnn)
+    p.add_argument(
+        "--width_mult",
+        type=float,
+        default=1.0,
+        help="escala as larguras iniciais (ecnn/we2)",
+    )
+    p.add_argument(
+        "--budget_per_step",
+        type=float,
+        default=0.05,
+        help="fração dos parâmetros iniciais do extrator que pode ser acrescentada por etapa",
+    )
+    p.add_argument(
+        "--need_signal", choices=["rank", "usage", "uniform"], default="rank"
+    )
+    p.add_argument("--max_growth_frac", type=float, default=0.25)
+    p.add_argument("--max_width_factor", type=float, default=2.0)
+    p.add_argument("--stats_images", type=int, default=2048)
     # DER / Orth-DER
     p.add_argument(
         "--prune", action="store_true", help="poda por máscara de canais do DER"
@@ -186,6 +207,14 @@ def run_seed(args, seed, device):
 
     summary = tracker.run_summary()
     summary["params_initial"] = params_initial
+    expansion_log = next(
+        (
+            p.history
+            for p in strategy.plugins
+            if type(p).__name__ == "BudgetedExpansionPlugin"
+        ),
+        None,
+    )
     return {
         "config": {
             **vars(args),
@@ -197,6 +226,7 @@ def run_seed(args, seed, device):
         "steps": tracker.steps,
         "curve": tracker.curve,
         "epoch_log": tracker.epoch_log,
+        "expansion_log": expansion_log,
         "summary": summary,
         "total_seconds": time.time() - t_start,
     }
