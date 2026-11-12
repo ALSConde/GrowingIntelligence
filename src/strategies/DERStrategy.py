@@ -107,7 +107,7 @@ class DERStrategy(SupervisedTemplate):
         self.ft_wd = ft_wd
         self.ft_temp = ft_temp
 
-        # mesma política de memória do ER do artigo: fixa, mem_per_class por classe
+        # mesma política de memória do ER: fixa, mem_per_class por classe
         self.storage_policy = ClassBalancedBuffer(
             max_size=mem_per_class * total_classes,
             adaptive_size=False,

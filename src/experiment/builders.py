@@ -20,7 +20,13 @@ from avalanche.training.storage_policy import ClassBalancedBuffer
 MEMORY_FREE = {"naive", "ewc", "si", "lwf", "lwm", "joint"}
 DER_FAMILY = {"der", "orth_der"}
 WE_ARCHS = {"we", "we_att"}
-ECNN_ARCHS = {"ecnn", "we2", "we2_fc"}  # CNN com largura ajustável (ver Model_ECNN.py)
+ECNN_ARCHS = {"ecnn", "we2", "we2_fc", "ecnn_att", "we2_att", "we2_fc_att"}
+WE2_ARCHS = {
+    "we2",
+    "we2_fc",
+    "we2_att",
+    "we2_fc_att",
+}  
 
 
 def method_tag(args) -> str:
@@ -56,9 +62,10 @@ def build_model(args, benchmark):
             prune=args.prune,
         )
     if args.arch in ECNN_ARCHS:
-        from models.Model_ECNN import ExpandableCNN
+        from models.Model_ECNN import ExpandableCNN, ExpandableCNNAttention
 
-        return ExpandableCNN(width_mult=args.width_mult)
+        cls = ExpandableCNNAttention if args.arch.endswith("_att") else ExpandableCNN
+        return cls(width_mult=args.width_mult)
     from models.Model_MLP import Model_CNN_Cifar, Model_CNN_Cifar_attention
     from models.Model_WE import Model_WE_CIL_CIFAR, Model_WE_CIL_Cifar_attention
 
@@ -81,14 +88,14 @@ def build_plugins(args, model, device, n_classes):
 
     plugins = []
     dynamic = args.strategy not in DER_FAMILY and (
-        args.arch in WE_ARCHS or args.arch in ("we2", "we2_fc")
+        args.arch in WE_ARCHS or args.arch in WE2_ARCHS
     )
-    if args.strategy not in DER_FAMILY and args.arch in ("we2", "we2_fc"):
+    if args.strategy not in DER_FAMILY and args.arch in WE2_ARCHS:
         from plugins.BudgetedExpansionPlugin import BudgetedExpansionPlugin
 
         plugins.append(
             BudgetedExpansionPlugin(
-                layers="all" if args.arch == "we2" else "fc",
+                layers="fc" if args.arch.startswith("we2_fc") else "all",
                 need_signal=args.need_signal,
                 budget_per_step=args.budget_per_step,
                 loss_threshold=args.loss_threshold,

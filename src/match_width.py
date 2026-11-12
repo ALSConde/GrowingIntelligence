@@ -5,6 +5,7 @@ ou apenas de ter mais parâmetros.
     python match_width.py --results results/we2_lwf     # usa params finais médios das seeds
     python match_width.py --target 3200000              # ou um alvo explícito
 """
+
 import argparse
 
 from experiment.summary import aggregate
@@ -19,8 +20,14 @@ def total_params(mult, n_classes=100):
 def main():
     p = argparse.ArgumentParser()
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--results", help="diretório de resultados de um método com expansão")
-    g.add_argument("--target", type=float, help="nº de parâmetros alvo (com classificador de 100 classes)")
+    g.add_argument(
+        "--results", help="diretório de resultados de um método com expansão"
+    )
+    g.add_argument(
+        "--target",
+        type=float,
+        help="nº de parâmetros alvo (com classificador de 100 classes)",
+    )
     p.add_argument("--n_classes", type=int, default=100)
     a = p.parse_args()
     target = a.target
@@ -34,8 +41,10 @@ def main():
         mid = (lo + hi) / 2
         lo, hi = (mid, hi) if total_params(mid, a.n_classes) < target else (lo, mid)
     mult = round((lo + hi) / 2, 3)
-    print(f"alvo: {target:,.0f} parâmetros -> --width_mult {mult}  "
-          f"(ecnn resultante: {total_params(mult, a.n_classes):,} parâmetros)")
+    print(
+        f"alvo: {target:,.0f} parâmetros -> --width_mult {mult}  "
+        f"(ecnn resultante: {total_params(mult, a.n_classes):,} parâmetros)"
+    )
 
 
 if __name__ == "__main__":

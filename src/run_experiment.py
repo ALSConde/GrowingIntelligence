@@ -48,11 +48,23 @@ def get_args(argv=None):
     )
     p.add_argument(
         "--arch",
-        choices=["cnn", "we", "cnn_att", "we_att", "ecnn", "we2", "we2_fc"],
+        choices=[
+            "cnn",
+            "we",
+            "cnn_att",
+            "we_att",
+            "ecnn",
+            "we2",
+            "we2_fc",
+            "ecnn_att",
+            "we2_att",
+            "we2_fc_att",
+        ],
         default="cnn",
         help="cnn=baseline, we=Width Expansion, cnn_att=só atenção, we_att=WE+Atenção; "
         "ecnn=CNN de largura ajustável (--width_mult), we2=expansão com orçamento "
-        "(conv+FC), we2_fc=expansão com orçamento só nas FC",
+        "(conv+FC), we2_fc=expansão com orçamento só nas FC; sufixo _att = com atenção "
+        "(ecnn_att, we2_att, we2_fc_att)",
     )
     p.add_argument(
         "--strategy",

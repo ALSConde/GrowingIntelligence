@@ -30,7 +30,7 @@ class BudgetedExpansionPlugin(SupervisedPlugin):
          `max_width_factor` vezes a largura inicial. O orçamento que sobra (por causa dos
          tetos) é redistribuído entre as camadas ainda com folga.
 
-    `layers`: "all" (5 conv + 2 FC) ou "fc" (só as FC, equivalente ao WE original).
+    `layers`: "all" (todas: 5 conv + FC) ou "fc" (só as FC, equivalente ao WE original).
     O custo previsto ignora termos cruzados entre camadas expandidas na mesma etapa; o
     aumento real de parâmetros é registrado em `history`.
     """
@@ -50,7 +50,8 @@ class BudgetedExpansionPlugin(SupervisedPlugin):
     ):
         super().__init__()
         assert layers in ("all", "fc") and need_signal in ("rank", "usage", "uniform")
-        self.layer_ids = list(range(7)) if layers == "all" else [5, 6]
+        self.layers = layers
+        self.layer_ids = None  # definido na primeira chamada, a partir do modelo
         self.need_signal = need_signal
         self.budget_per_step = budget_per_step
         self.loss_threshold = loss_threshold
@@ -71,7 +72,7 @@ class BudgetedExpansionPlugin(SupervisedPlugin):
         loader = DataLoader(data, batch_size=strategy.train_mb_size, shuffle=False)
         criterion = strategy._criterion
         loss_sum, n_total, n_stats = 0.0, 0, 0
-        acc = [None] * 7
+        acc = [None] * len(model.widths)
         for x, y, *_ in loader:
             x, y = x.to(self.device), y.to(self.device)
             logits, acts = model.forward_acts(x)
@@ -145,6 +146,11 @@ class BudgetedExpansionPlugin(SupervisedPlugin):
         model = strategy.model
         step = strategy.experience.current_experience
         if self._p0 is None:
+            self.layer_ids = (
+                list(range(len(model.widths)))
+                if self.layers == "all"
+                else list(model.FC_IDS)
+            )
             self._p0 = model.extractor_params()
             self._w0 = list(model.widths)
             self.history.append(
