@@ -1,5 +1,7 @@
 .vscode
 .vscode/*
+.devcontainer/*
+Dockerfile
 img/*
 src/**/__pycache__/*
 src/graph.py

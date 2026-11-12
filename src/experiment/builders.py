@@ -50,6 +50,7 @@ def make_benchmark(args, seed):
         return_task_id=False,
         fixed_class_order=list(range(100)),
         seed=seed,
+        dataset_root="./data/cifar100"
     )
 
 

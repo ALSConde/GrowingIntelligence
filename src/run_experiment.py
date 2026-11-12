@@ -4,16 +4,16 @@ acurácia por classe; ao fim agrega mean ± std.
 
 Exemplos (a partir de src/):
     # seu método e as baselines com as mesmas condições do artigo (10 seeds cada)
-    python run_experiment.py --arch we_att --strategy lwf
-    python run_experiment.py --arch cnn    --strategy lwf
-    python run_experiment.py --arch we     --strategy naive
-    python run_experiment.py --arch cnn    --strategy er
-    python run_experiment.py --strategy der --prune
-    python run_experiment.py --strategy orth_der --prune
+    python src/run_experiment.py --arch we_att --strategy lwf
+    python src/run_experiment.py --arch cnn    --strategy lwf
+    python src/run_experiment.py --arch we     --strategy naive
+    python src/run_experiment.py --arch cnn    --strategy er
+    python src/run_experiment.py --strategy der --prune
+    python src/run_experiment.py --strategy orth_der --prune
     # teste rápido do pipeline, sem baixar o CIFAR-100 (dados sintéticos)
-    python run_experiment.py --arch we --strategy lwf --smoke
+    python src/run_experiment.py --arch we --strategy lwf --smoke
     # comparar resultados
-    python summarize.py results/we_att_lwf results/cnn_lwf --baseline results/cnn_lwf
+    python src/summarize.py results/we_att_lwf results/cnn_lwf --baseline results/cnn_lwf
 
 Valores padrão = artigo: Split CIFAR-100 em 10 etapas de 10 classes, Adam lr 1e-3, batch
 256, 30 épocas por etapa, EWC/SI λ=1e9, LwF/LwM T=2 β=1, memória de 100 amostras por classe.
