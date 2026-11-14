@@ -1,5 +1,3 @@
-"""Rastreamento de parâmetros, acurácia ao longo do treino e acurácia por classe."""
-
 import contextlib
 
 import numpy as np
@@ -13,16 +11,12 @@ from avalanche.models.utils import avalanche_forward
 
 @contextlib.contextmanager
 def suppress_wd_stats(enabled: bool = True):
-    """WDLayer.forward registra ativações em TODA passada (inclusive em avaliação), e essas
-    estatísticas alimentam o `usage_ratio` usado pelo WDExpansionPlugin para decidir a
-    expansão. Passadas de avaliação não devem alterar essas estatísticas; este contexto
-    desliga o registro enquanto avaliamos."""
     if not enabled:
         yield
         return
     try:
         from models.layers.WDStats import WDStats
-    except Exception:  # modelo sem WDLayer
+    except Exception:
         yield
         return
     original = WDStats.record_activations
@@ -57,19 +51,6 @@ def describe_model(model) -> dict:
 
 
 class EvalTracker(SupervisedPlugin):
-    """Avalia o modelo no conjunto de teste COMPLETO (todas as classes) sem passar pelo
-    `strategy.eval`, registrando:
-
-    - por época (a cada `eval_every` épocas e ao fim de cada etapa): acurácia nas classes
-      já vistas (`acc_seen`), em todas as classes (`acc_all`), por experiência e por classe;
-    - por época de treino (todas): perda total e acurácia no minibatch de treino.
-
-    Não chama `model.adaptation`, então não altera a largura do classificador nem
-    dispara expansões; as passadas de avaliação não alteram as estatísticas dos WDLayer
-    (a menos que legacy_stats=True no fim da etapa, que reproduz o protocolo antigo do
-    main.py em que strategy.eval(test_stream) alimentava essas estatísticas).
-    """
-
     def __init__(
         self,
         benchmark,
@@ -97,9 +78,9 @@ class EvalTracker(SupervisedPlugin):
         self.Y = torch.cat(ys).long()
 
         self.seen = set()
-        self.curve = []  # avaliações dentro do treino
-        self.epoch_log = []  # perda/acurácia de treino por época
-        self.steps = []  # avaliação ao fim de cada etapa
+        self.curve = []
+        self.epoch_log = []
+        self.steps = []
         self._ep = 0
         self._step = 0
         self._reset_epoch_acc()
@@ -193,9 +174,7 @@ class EvalTracker(SupervisedPlugin):
     def run_summary(self):
         T = len(self.steps)
         A = [s["acc_seen"] for s in self.steps]
-        a = [
-            s["per_exp"] for s in self.steps
-        ]  # a[t][j]: acurácia na experiência j após a etapa t
+        a = [s["per_exp"] for s in self.steps]
         out = {
             "final_acc_seen": A[-1],
             "avg_incremental_acc": float(np.mean(A)),
@@ -215,4 +194,24 @@ class EvalTracker(SupervisedPlugin):
         else:
             out["forgetting"] = None
             out["bwt"] = None
+
+        # --- per class ---------------------------------------------------------------
+        pc = [s["per_class"] for s in self.steps]
+        n = self.n_classes
+        learned_step = [None] * n
+        for j, classes in enumerate(self.exp_classes):
+            for c in classes:
+                learned_step[c] = j
+        acc_learned, forg, drop = [None] * n, [None] * n, [None] * n
+        for c, j in enumerate(learned_step):
+            if j is None or j >= T:
+                continue
+            acc_learned[c] = pc[j][c]
+            if j <= T - 2:
+                forg[c] = max(pc[t][c] for t in range(j, T - 1)) - pc[T - 1][c]
+                drop[c] = pc[j][c] - pc[T - 1][c]
+        out["class_learned_step"] = learned_step
+        out["per_class_learned"] = acc_learned
+        out["per_class_forgetting"] = forg
+        out["per_class_drop"] = drop
         return out

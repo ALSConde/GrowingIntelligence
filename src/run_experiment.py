@@ -4,16 +4,16 @@ acurácia por classe; ao fim agrega mean ± std.
 
 Exemplos (a partir de src/):
     # seu método e as baselines com as mesmas condições do artigo (10 seeds cada)
-    python src/run_experiment.py --arch we_att --strategy lwf
-    python src/run_experiment.py --arch cnn    --strategy lwf
-    python src/run_experiment.py --arch we     --strategy naive
-    python src/run_experiment.py --arch cnn    --strategy er
-    python src/run_experiment.py --strategy der --prune
-    python src/run_experiment.py --strategy orth_der --prune
+    python run_experiment.py --arch we_att --strategy lwf
+    python run_experiment.py --arch cnn    --strategy lwf
+    python run_experiment.py --arch we     --strategy naive
+    python run_experiment.py --arch cnn    --strategy er
+    python run_experiment.py --strategy der --prune
+    python run_experiment.py --strategy orth_der --prune
     # teste rápido do pipeline, sem baixar o CIFAR-100 (dados sintéticos)
-    python src/run_experiment.py --arch we --strategy lwf --smoke
+    python run_experiment.py --arch we --strategy lwf --smoke
     # comparar resultados
-    python src/summarize.py results/we_att_lwf results/cnn_lwf --baseline results/cnn_lwf
+    python summarize.py results/we_att_lwf results/cnn_lwf --baseline results/cnn_lwf
 
 Valores padrão = artigo: Split CIFAR-100 em 10 etapas de 10 classes, Adam lr 1e-3, batch
 256, 30 épocas por etapa, EWC/SI λ=1e9, LwF/LwM T=2 β=1, memória de 100 amostras por classe.
@@ -32,6 +32,7 @@ import torch
 from experiment.builders import (
     DER_FAMILY,
     MEMORY_FREE,
+    MLP_ARCHS,
     build_model,
     build_plugins,
     build_strategy,
@@ -41,10 +42,67 @@ from experiment.builders import (
 from experiment.summary import fmt, write_aggregate
 from experiment.tracking import EvalTracker, count_parameters
 
+PRESETS = {
+    "cifar100": dict(
+        n_exp=10,
+        epochs=30,
+        batch_size=256,
+        eval_batch_size=128,
+        agem_ref_batch=256,
+        d_att=256,
+        att_mem=64,
+        arch="rcnn",
+        backbone="res",
+    ),
+    "mnist": dict(
+        n_exp=5,
+        epochs=10,
+        batch_size=128,
+        eval_batch_size=64,
+        agem_ref_batch=128,
+        d_att=128,
+        att_mem=32,
+        arch="mlp",
+        backbone="mlp",
+    ),
+}
+
+
+def resolve_args(args, arch_given):
+    pre = PRESETS[args.dataset]
+    for k, v in pre.items():
+        if getattr(args, k) is None:
+            setattr(args, k, v)
+    if args.dataset == "mnist":
+        if args.arch not in MLP_ARCHS:
+            raise SystemExit(
+                f"MNIST só aceita MLP sem CNN: --arch {sorted(MLP_ARCHS)} (recebido {args.arch})"
+            )
+        if args.strategy in DER_FAMILY and args.backbone != "mlp":
+            raise SystemExit("no MNIST, der/orth_der usam --backbone mlp")
+    else:
+        if args.arch in MLP_ARCHS:
+            raise SystemExit(
+                "as arquiteturas MLP (mlp, mlp_att, mwe, mwe_att) são do --dataset mnist"
+            )
+        if args.backbone == "mlp":
+            raise SystemExit("--backbone mlp é do --dataset mnist")
+    if args.strategy in DER_FAMILY and arch_given:
+        print(
+            "[aviso] --arch é ignorado para der/orth_der (usam o DERNet; escolha com --backbone)"
+        )
+    return args
+
 
 def get_args(argv=None):
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--dataset",
+        choices=["cifar100", "mnist"],
+        default="cifar100",
+        help="mnist = Split MNIST (5 etapas), só com MLP; cifar100 = Split CIFAR-100 (10 etapas)",
     )
     p.add_argument(
         "--arch",
@@ -59,12 +117,24 @@ def get_args(argv=None):
             "ecnn_att",
             "we2_att",
             "we2_fc_att",
+            "rcnn",
+            "rwe",
+            "rwe_fc",
+            "rcnn_att",
+            "rwe_att",
+            "rwe_fc_att",
+            "mlp",
+            "mlp_att",
+            "mwe",
+            "mwe_att",
         ],
-        default="cnn",
+        default=None,
         help="cnn=baseline, we=Width Expansion, cnn_att=só atenção, we_att=WE+Atenção; "
         "ecnn=CNN de largura ajustável (--width_mult), we2=expansão com orçamento "
         "(conv+FC), we2_fc=expansão com orçamento só nas FC; sufixo _att = com atenção "
-        "(ecnn_att, we2_att, we2_fc_att)",
+        "(ecnn_att, we2_att, we2_fc_att); r* = versões com conexões de salto "
+        "(rcnn fixa, rwe expande blocos+FC, rwe_fc só FC); MNIST: mlp, mlp_att (fixas), "
+        "mwe, mwe_att (expansão por orçamento). Padrão: rcnn (cifar100) / mlp (mnist)",
     )
     p.add_argument(
         "--strategy",
@@ -83,10 +153,28 @@ def get_args(argv=None):
         ],
     )
     p.add_argument("--seeds", type=int, nargs="+", default=list(range(1, 11)))
-    p.add_argument("--n_exp", type=int, default=10)
-    p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--batch_size", type=int, default=256)
-    p.add_argument("--eval_batch_size", type=int, default=128)
+    p.add_argument("--n_exp", type=int, default=None)
+    p.add_argument(
+        "--class_order",
+        choices=["shift", "fixed", "random"],
+        default="shift",
+        help="shift = deslocamento afim ordem[i]=(offset+i*stride) mod N, com offset e stride sorteados "
+        "por seed (quebra a continuidade dos ids); fixed = ordem natural, igual em todas as seeds; "
+        "random = permutação aleatória por seed. Em todos os modos, métodos rodados com a mesma "
+        "seed recebem exatamente a mesma ordem",
+    )
+    p.add_argument(
+        "--class_stride",
+        type=int,
+        default=None,
+        help="força o stride do modo shift (coprimo de N; 1 = rotação)",
+    )
+    p.add_argument(
+        "--class_offset", type=int, default=None, help="força o offset do modo shift"
+    )
+    p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--batch_size", type=int, default=None)
+    p.add_argument("--eval_batch_size", type=int, default=None)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument(
         "--eval_every",
@@ -120,7 +208,19 @@ def get_args(argv=None):
     p.add_argument("--lwf_beta", type=float, default=1.0)
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--mem_per_class", type=int, default=100)
-    p.add_argument("--agem_ref_batch", type=int, default=256)
+    p.add_argument("--agem_ref_batch", type=int, default=None)
+    p.add_argument(
+        "--d_att",
+        type=int,
+        default=None,
+        help="dimensão de atenção (padrão: 256 cifar100, 128 mnist)",
+    )
+    p.add_argument(
+        "--att_mem",
+        type=int,
+        default=None,
+        help="vetores de memória da atenção (padrão: 64 cifar100, 32 mnist)",
+    )
     # expansão (WE)
     p.add_argument("--growth_factor", type=float, default=0.25)
     p.add_argument("--growth_threshold", type=float, default=0.5)
@@ -137,6 +237,12 @@ def get_args(argv=None):
         help="escala as larguras iniciais (ecnn/we2)",
     )
     p.add_argument(
+        "--inner_ratio",
+        type=float,
+        default=0.5,
+        help="canais internos do bloco residual / largura do fluxo (arquiteturas r*)",
+    )
+    p.add_argument(
         "--budget_per_step",
         type=float,
         default=0.05,
@@ -149,6 +255,13 @@ def get_args(argv=None):
     p.add_argument("--max_width_factor", type=float, default=2.0)
     p.add_argument("--stats_images", type=int, default=2048)
     # DER / Orth-DER
+    p.add_argument(
+        "--backbone",
+        choices=["plain", "res", "mlp"],
+        default=None,
+        help="extrator por etapa do der/orth_der: res = CNN com saltos (padrão cifar100), "
+        "plain = CNN do artigo, mlp = MLP (padrão mnist)",
+    )
     p.add_argument(
         "--prune", action="store_true", help="poda por máscara de canais do DER"
     )
@@ -195,6 +308,9 @@ def run_seed(args, seed, device):
 
     params_initial = count_parameters(model)
     print(f"[run] parâmetros antes do treinamento: {params_initial:,}")
+    print(
+        f"[run] ordem das classes ({benchmark.order_info}): {[int(c) for c in benchmark.classes_order]}"
+    )
     t_start = time.time()
     for experience in benchmark.train_stream:
         step = experience.current_experience
@@ -235,6 +351,8 @@ def run_seed(args, seed, device):
             "n_classes": n_classes,
         },
         "params_initial": params_initial,
+        "classes_order": [int(c) for c in benchmark.classes_order],
+        "class_order_info": benchmark.order_info,
         "steps": tracker.steps,
         "curve": tracker.curve,
         "epoch_log": tracker.epoch_log,
@@ -246,10 +364,7 @@ def run_seed(args, seed, device):
 
 def main(argv=None):
     args = get_args(argv)
-    if args.strategy in DER_FAMILY and args.arch != "cnn":
-        print(
-            "[aviso] --arch é ignorado para der/orth_der (usam o DERNet com a CNN do artigo)"
-        )
+    args = resolve_args(args, arch_given=args.arch is not None)
     if args.prune and args.strategy not in DER_FAMILY:
         raise SystemExit("--prune só vale para --strategy der/orth_der")
     device = (
@@ -259,7 +374,7 @@ def main(argv=None):
     )
     tag = method_tag(args)
     out_dir = args.out_dir or os.path.join(
-        "results", tag + ("_smoke" if args.smoke else "")
+        "results", args.dataset, tag + ("_smoke" if args.smoke else "")
     )
     os.makedirs(out_dir, exist_ok=True)
 
@@ -270,7 +385,9 @@ def main(argv=None):
                 f"[run] seed {seed} já existe em {path}; pulando (use --no_resume para refazer)"
             )
             continue
-        print(f"\n===== {tag} | seed {seed} | dispositivo {device} =====")
+        print(
+            f"\n===== {args.dataset} | {tag} | seed {seed} | dispositivo {device} ====="
+        )
         result = run_seed(args, seed, device)
         with open(path, "w") as f:
             json.dump(result, f)

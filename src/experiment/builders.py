@@ -1,11 +1,9 @@
-"""Construção de benchmark, modelo, plugins e estratégia a partir dos argumentos da CLI,
-espelhando as configurações do main.py / do artigo (Split CIFAR-100, 10 etapas, Adam).
-"""
-
+import math
+import numpy as np
 from torch.nn import CrossEntropyLoss
 from torch.optim import Adam
 
-from avalanche.benchmarks import SplitCIFAR100
+from avalanche.benchmarks import SplitCIFAR100, SplitMNIST
 from avalanche.evaluation.metrics import accuracy_metrics, loss_metrics
 from avalanche.logging.interactive_logging import InteractiveLogger
 from avalanche.training import Naive
@@ -20,38 +18,115 @@ from avalanche.training.storage_policy import ClassBalancedBuffer
 MEMORY_FREE = {"naive", "ewc", "si", "lwf", "lwm", "joint"}
 DER_FAMILY = {"der", "orth_der"}
 WE_ARCHS = {"we", "we_att"}
-ECNN_ARCHS = {"ecnn", "we2", "we2_fc", "ecnn_att", "we2_att", "we2_fc_att"}
+RES_ARCHS = {
+    "rcnn",
+    "rwe",
+    "rwe_fc",
+    "rcnn_att",
+    "rwe_att",
+    "rwe_fc_att",
+}
+ECNN_ARCHS = {"ecnn", "we2", "we2_fc", "ecnn_att", "we2_att", "we2_fc_att"} | RES_ARCHS
+MLP_ARCHS = {
+    "mlp",
+    "mlp_att",
+    "mwe",
+    "mwe_att",
+}
 WE2_ARCHS = {
     "we2",
     "we2_fc",
     "we2_att",
     "we2_fc_att",
-}  
+    "rwe",
+    "rwe_fc",
+    "rwe_att",
+    "rwe_fc_att",
+    "mwe",
+    "mwe_att",
+}
+FC_ONLY_ARCHS = {"we2_fc", "we2_fc_att", "rwe_fc", "rwe_fc_att"}
+SMOKE_CLASSES_PER_EXP = {"cifar100": 4, "mnist": 2}
+SMOKE_SHAPE = {"cifar100": (3, 32, 32), "mnist": (1, 28, 28)}
 
 
 def method_tag(args) -> str:
     if args.strategy in DER_FAMILY:
-        return args.strategy + ("_p" if args.prune else "")
+        return (
+            args.strategy
+            + ("_" + args.backbone if args.backbone in ("res", "mlp") else "")
+            + ("_p" if args.prune else "")
+        )
     if args.strategy == "joint":
         return f"{args.arch}_joint"
     return f"{args.arch}_{args.strategy}"
 
 
+def n_total_classes(args) -> int:
+    if args.smoke:
+        return args.n_exp * SMOKE_CLASSES_PER_EXP[args.dataset]
+    return 10 if args.dataset == "mnist" else 100
+
+
+def shift_class_order(seed, n, stride=None, offset=None):
+    rng = np.random.RandomState((1_000_003 * int(seed) + n) % (2**32 - 1))
+    coprime = [k for k in range(2, n) if math.gcd(k, n) == 1]
+    spread = [k for k in coprime if min(k, n - k) >= 3]
+    coprime = spread or coprime
+    drawn_stride = int(coprime[rng.randint(len(coprime))]) if coprime else 1
+    drawn_offset = int(rng.randint(n))
+    stride = drawn_stride if stride is None else int(stride)
+    offset = drawn_offset if offset is None else int(offset) % n
+    if math.gcd(stride, n) != 1:
+        raise ValueError(
+            f"--class_stride {stride} is not coprime with {n} so it cannot generate a full permutation of classes."
+        )
+    return [(offset + i * stride) % n for i in range(n)], stride, offset
+
+
+def derive_class_order(args, seed):
+    n = n_total_classes(args)
+    if args.class_order == "fixed":
+        return list(range(n)), {"mode": "fixed"}
+    if args.class_order == "random":
+        return None, {"mode": "random"}
+    order, stride, offset = shift_class_order(
+        seed, n, args.class_stride, args.class_offset
+    )
+    return order, {"mode": "shift", "stride": stride, "offset": offset}
+
+
 def make_benchmark(args, seed):
     n_exp = 1 if args.strategy == "joint" else args.n_exp
+    order, info = derive_class_order(args, seed)
     if args.smoke:
         from experiment.synthetic import make_synthetic_benchmark
 
-        return make_synthetic_benchmark(
-            n_experiences=n_exp, classes_per_exp=4, seed=seed
+        bm = make_synthetic_benchmark(
+            n_experiences=n_exp,
+            n_classes=n_total_classes(args),
+            shape=SMOKE_SHAPE[args.dataset],
+            seed=seed,
+            fixed_order=order,
         )
-    return SplitCIFAR100(
-        n_experiences=n_exp,
-        return_task_id=False,
-        fixed_class_order=list(range(100)),
-        seed=seed,
-        dataset_root="./data/cifar100"
-    )
+    elif args.dataset == "mnist":
+        bm = SplitMNIST(
+            n_experiences=n_exp,
+            return_task_id=False,
+            fixed_class_order=order,
+            seed=seed,
+            dataset_root="./data/mnist",
+        )
+    else:
+        bm = SplitCIFAR100(
+            n_experiences=n_exp,
+            return_task_id=False,
+            fixed_class_order=order,
+            seed=seed,
+            dataset_root="./data/cifar100",
+        )
+    bm.order_info = info
+    return bm
 
 
 def build_model(args, benchmark):
@@ -61,12 +136,37 @@ def build_model(args, benchmark):
         return DERNet(
             initial_out_features=benchmark.n_classes // benchmark.n_experiences,
             prune=args.prune,
+            backbone=args.backbone,
+            inner_ratio=args.inner_ratio,
+            width_mult=args.width_mult,
+        )
+    if args.arch in MLP_ARCHS:
+        from models.Model_EMLP import ExpandableMLP
+
+        return ExpandableMLP(
+            width_mult=args.width_mult,
+            attention=args.arch.endswith("_att"),
+            d_att=args.d_att,
+            mem_size=args.att_mem,
+        )
+    if args.arch in RES_ARCHS:
+        from models.Model_RCNN import ResExpandableCNN
+
+        return ResExpandableCNN(
+            width_mult=args.width_mult,
+            inner_ratio=args.inner_ratio,
+            attention=args.arch.endswith("_att"),
+            d_att=args.d_att,
+            mem_size=args.att_mem,
         )
     if args.arch in ECNN_ARCHS:
         from models.Model_ECNN import ExpandableCNN, ExpandableCNNAttention
 
-        cls = ExpandableCNNAttention if args.arch.endswith("_att") else ExpandableCNN
-        return cls(width_mult=args.width_mult)
+        if args.arch.endswith("_att"):
+            return ExpandableCNNAttention(
+                width_mult=args.width_mult, d_att=args.d_att, mem_size=args.att_mem
+            )
+        return ExpandableCNN(width_mult=args.width_mult)
     from models.Model_MLP import Model_CNN_Cifar, Model_CNN_Cifar_attention
     from models.Model_WE import Model_WE_CIL_CIFAR, Model_WE_CIL_Cifar_attention
 
@@ -96,7 +196,7 @@ def build_plugins(args, model, device, n_classes):
 
         plugins.append(
             BudgetedExpansionPlugin(
-                layers="fc" if args.arch.startswith("we2_fc") else "all",
+                layers="fc" if args.arch in FC_ONLY_ARCHS else "all",
                 need_signal=args.need_signal,
                 budget_per_step=args.budget_per_step,
                 loss_threshold=args.loss_threshold,

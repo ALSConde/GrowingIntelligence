@@ -2,26 +2,10 @@ import warnings
 
 from avalanche.core import SupervisedPlugin
 
-# nomes de atributos que costumam guardar exemplares (ReplayPlugin, A-GEM, buffers próprios)
 _MEMORY_ATTRS = ("storage_policy", "buffer", "buffers", "ext_mem", "memory")
 
 
 class ExemplarFreeAudit(SupervisedPlugin):
-    """Auditoria de 'sem exemplares', para rodar junto com qualquer estratégia que deva
-    ser livre de memória (Naive, EWC, SI, LwF, LwM, WE, WE+Atenção).
-
-    Verificação rígida: se algum minibatch de treino tiver rótulo de classe fora da
-    experiência corrente, levanta RuntimeError (isso só acontece se amostras de
-    experiências anteriores estiverem sendo reapresentadas).
-
-    Verificação heurística: avisa (warning) se a estratégia ou algum plugin tiver
-    atributo com nome típico de buffer de exemplares. Pode dar falso positivo; nesse
-    caso inspecione o objeto apontado.
-
-    Ao fim de cada experiência imprime quantas amostras de treino foram vistas e de
-    quais classes, para registrar no log do experimento.
-    """
-
     def __init__(self):
         super().__init__()
         self._seen = 0
