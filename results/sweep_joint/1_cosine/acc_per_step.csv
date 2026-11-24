@@ -1,0 +1,2 @@
+step,acc_seen_mean,acc_seen_std,params_mean,params_std,forgetting_of_classes_learned_here_mean,forgetting_of_classes_learned_here_std
+0,0.5351,0.0019,3760524,0,,0.0000

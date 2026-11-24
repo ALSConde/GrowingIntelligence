@@ -13,7 +13,7 @@ EXTRA=${EXTRA:-""}
 SFX=""
 if [ -n "$SMOKE" ]; then EXTRA="$EXTRA --smoke"; SFX="_smoke"; fi
 
-run() { echo "+ python $*"; if [ -z "$DRY" ]; then python "$@" || exit 1; fi; }
+run() { echo "+ python src/$*"; if [ -z "$DRY" ]; then python "$@" || exit 1; fi; }
 matrix() { run run_matrix.py --dataset $DATASET "$@" $EXTRA; }
 
 # largura da CNN fixa que iguala o nº FINAL de parâmetros do WE (receita v2: pool gap + emb 128)

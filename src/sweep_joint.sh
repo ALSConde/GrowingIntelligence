@@ -6,7 +6,7 @@ SEEDS="1 2 3"
 OUT=results/sweep_joint
 run() {  # nome, args...
   name=$1; shift
-  python run_experiment.py --dataset cifar100 --arch $ARCH --strategy joint --seeds $SEEDS \
+  python src/run_experiment.py --dataset cifar100 --arch $ARCH --strategy joint --seeds $SEEDS \
       --quiet --out_dir $OUT/$name "$@"
 }
 run 0_legacy            --recipe legacy
