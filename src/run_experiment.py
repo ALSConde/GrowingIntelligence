@@ -129,6 +129,8 @@ def resolve_args(args, arch_given):
     for k, v in recipe.items():
         if getattr(args, k) is None:
             setattr(args, k, v)
+    if args.num_workers is None:
+        args.num_workers = 4 if (v2 and not args.smoke) else 0
     if args.pool == "gap" and not (is_res or (is_der and args.backbone == "res")):
         raise SystemExit(
             "--pool gap vale para as arquiteturas residuais (rcnn/rwe...) e DER res"
@@ -347,6 +349,18 @@ def get_args(argv=None):
     # informada, vale sobre a receita (para ablações); None = usa o valor da receita.
     p.add_argument("--recipe", choices=["v2", "legacy"], default="v2")
     p.add_argument(
+        "--num_workers",
+        type=int,
+        default=None,
+        help="processos de carregamento/augmentation do treino (padrão: 4 na receita v2 com "
+        "GPU; 0 em legacy e em --smoke). Mudar altera o fluxo aleatório da augmentation",
+    )
+    p.add_argument(
+        "--no_aggregate",
+        action="store_true",
+        help="não agrega ao fim (usado pelos processos paralelos do run_matrix --parallel)",
+    )
+    p.add_argument(
         "--tag_suffix", default="", help="sufixo livre no nome da pasta de resultados"
     )
     p.add_argument("--lr_schedule", choices=["const", "cosine"], default=None)
@@ -466,7 +480,11 @@ def run_seed(args, seed, device):
         step = experience.current_experience
         params_before = count_parameters(strategy.model)
         t0 = time.time()
-        strategy.train(experience)
+        strategy.train(
+            experience,
+            num_workers=args.num_workers,
+            persistent_workers=args.num_workers > 0,
+        )
         seconds = time.time() - t0
         if any(
             type(p).__name__ in ("LwFPlugin", "LwMPlugin") for p in strategy.plugins
@@ -561,10 +579,16 @@ def main(argv=None):
             f"\n===== {args.dataset} | {tag} | seed {seed} | dispositivo {device} ====="
         )
         result = run_seed(args, seed, device)
-        with open(path, "w") as f:
+        tmp = (
+            path + f".tmp{os.getpid()}"
+        )  # escrita atômica: outro processo nunca lê JSON pela metade
+        with open(tmp, "w") as f:
             json.dump(result, f)
+        os.replace(tmp, path)
         print(f"[run] salvo {path}")
 
+    if args.no_aggregate:
+        return
     agg = write_aggregate(out_dir)
     if agg:
         print(f"\n##### {tag}: {agg['n_runs']} execuções (seeds {agg['seeds']}) #####")
