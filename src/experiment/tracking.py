@@ -90,10 +90,12 @@ class EvalTracker(SupervisedPlugin):
         self._loss_sum, self._correct, self._n = 0.0, 0, 0
 
     @torch.no_grad()
-    def _predict(self, model, suppress: bool):
+    def _predict(self, model, suppress: bool, head=None):
         flags = {m: m.training for m in model.modules()}
         model.eval()
         preds = []
+        if head is not None and hasattr(model, "proto_mode"):
+            model.proto_mode = head == "ncm"
         try:
             with suppress_wd_stats(suppress):
                 for i in range(0, len(self.X), self.batch_size):
@@ -102,6 +104,8 @@ class EvalTracker(SupervisedPlugin):
                     out = avalanche_forward(model, x, t)
                     preds.append(out.argmax(1).cpu())
         finally:
+            if hasattr(model, "proto_mode"):
+                model.proto_mode = False
             for m, f in flags.items():
                 m.training = f
         return torch.cat(preds)
@@ -157,7 +161,19 @@ class EvalTracker(SupervisedPlugin):
 
     # ------------------------------------------------------------------ fim de etapa
     def end_of_step(self, model, step, epochs, params_before, params_after, seconds):
-        m = self._metrics(self._predict(model, suppress=not self.legacy_stats))
+        sup = not self.legacy_stats
+        has_proto = getattr(model, "emb_dim", 0) > 0 and hasattr(model, "proto_valid")
+        extra = {}
+        if has_proto:
+            m_lin = self._metrics(self._predict(model, sup, head="linear"))
+            m_ncm = self._metrics(self._predict(model, sup, head="ncm"))
+            m = m_ncm if getattr(model, "report_head", "linear") == "ncm" else m_lin
+            for h, mm in (("linear", m_lin), ("ncm", m_ncm)):
+                extra[f"acc_seen_{h}"] = mm["acc_seen"]
+                extra[f"per_exp_{h}"] = mm["per_exp"]
+                extra[f"per_class_{h}"] = mm["per_class"]
+        else:
+            m = self._metrics(self._predict(model, suppress=sup))
         row = {
             "step": step,
             "params_before": params_before,
@@ -165,6 +181,7 @@ class EvalTracker(SupervisedPlugin):
             "seconds": seconds,
             "model": describe_model(model),
             **m,
+            **extra,
         }
         self.steps.append(row)
         self.curve.append({"step": step, "epoch": epochs, **m})
@@ -194,6 +211,28 @@ class EvalTracker(SupervisedPlugin):
         else:
             out["forgetting"] = None
             out["bwt"] = None
+
+        # --- cabeças alternativas (linear x protótipos), quando o modelo tem embedding -------
+        for h in ("linear", "ncm"):
+            if f"acc_seen_{h}" not in self.steps[0]:
+                continue
+            Ah = [s[f"acc_seen_{h}"] for s in self.steps]
+            ah = [s[f"per_exp_{h}"] for s in self.steps]
+            out[f"final_acc_seen_{h}"] = Ah[-1]
+            out[f"avg_incremental_acc_{h}"] = float(np.mean(Ah))
+            out[f"per_class_final_{h}"] = self.steps[-1][f"per_class_{h}"]
+            out[f"forgetting_{h}"] = (
+                float(
+                    np.mean(
+                        [
+                            max(ah[t][j] for t in range(j, T - 1)) - ah[T - 1][j]
+                            for j in range(T - 1)
+                        ]
+                    )
+                )
+                if T > 1
+                else None
+            )
 
         # --- per class ---------------------------------------------------------------
         pc = [s["per_class"] for s in self.steps]

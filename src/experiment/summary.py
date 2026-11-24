@@ -39,6 +39,12 @@ def aggregate(result_dir):
         "forgetting",
         "bwt",
         "params_final",
+        "final_acc_seen_linear",
+        "final_acc_seen_ncm",
+        "avg_incremental_acc_linear",
+        "avg_incremental_acc_ncm",
+        "forgetting_linear",
+        "forgetting_ncm",
     ]
     agg = {
         "dir": result_dir,

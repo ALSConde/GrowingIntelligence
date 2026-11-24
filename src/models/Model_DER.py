@@ -156,8 +156,12 @@ class ResExpert(nn.Module):
         inner_ratio: float = 0.5,
         width_mult: float = 1.0,
         in_channels: int = 3,
+        pool: str = "flatten",
     ):
         super().__init__()
+        assert pool in ("flatten", "gap")
+        self.pool = pool
+        self.spatial = 1 if pool == "gap" else self.SPATIAL
         self.in_channels = in_channels
         s_ = [max(1, int(round(b * width_mult))) for b in self.STREAM]
         fc = max(1, int(round(400 * width_mult)))
@@ -182,7 +186,7 @@ class ResExpert(nn.Module):
             [nn.Conv2d(m_[i], s_[i], 3, padding=1) for i in range(5)]
         )
         self.bn_b = nn.ModuleList([nn.BatchNorm2d(s_[i]) for i in range(5)])
-        self.fc1 = nn.Linear(s_[4] * self.SPATIAL, fc)
+        self.fc1 = nn.Linear(s_[4] * self.spatial, fc)
         self.fc2 = nn.Linear(fc, fc)
         self.masks = (
             nn.ModuleList([ChannelMask(d, mask_init) for d in self.dims])
@@ -199,7 +203,7 @@ class ResExpert(nn.Module):
             h = self._m(5 + i, F.relu(self.bn_a[i](self.conv_a[i](x))))
             h = self._m(i, self.bn_b[i](self.conv_b[i](h)))
             x = F.relu(x + h)
-        x = x.view(x.size(0), -1)
+        x = x.mean(dim=(2, 3)) if self.pool == "gap" else x.view(x.size(0), -1)
         x = self._m(10, F.relu(self.fc1(x)))
         x = self._m(11, F.relu(self.fc2(x)))
         return x
@@ -234,7 +238,7 @@ class ResExpert(nn.Module):
             p += ks[i] * cin[i] * 9 + 3 * ks[i]
             p += km[i] * ks[i] * 9 + 3 * km[i]
             p += ks[i] * km[i] * 9 + 3 * ks[i]
-        p += f1 * (self.SPATIAL * ks[4]) + f1
+        p += f1 * (self.spatial * ks[4]) + f1
         p += f2 * f1 + f2
         return p
 
@@ -251,8 +255,8 @@ class ResExpert(nn.Module):
             )
             used = used + 9 * prev_n * ns[i] + 9 * ns[i] * nm[i] + 9 * nm[i] * ns[i]
             full += 9 * prev_d * d_s[i] + 9 * d_s[i] * d_m[i] + 9 * d_m[i] * d_s[i]
-        used = used + self.SPATIAL * ns[4] * n1 + n1 * n2
-        full += self.SPATIAL * d_s[4] * self.dims[10] + self.dims[10] * self.dims[11]
+        used = used + self.spatial * ns[4] * n1 + n1 * n2
+        full += self.spatial * d_s[4] * self.dims[10] + self.dims[10] * self.dims[11]
         return used / float(full)
 
 
@@ -331,9 +335,11 @@ class DERNet(models.DynamicModule):
         inner_ratio: float = 0.5,
         width_mult: float = 1.0,
         in_channels: int = 3,
+        pool: str = "flatten",
     ):
         super().__init__()
         assert backbone in ("plain", "res", "mlp")
+        self.pool = pool
         assert (
             backbone == "res" or in_channels == 3
         ), "the plain backbone only accepts 3 channels; use --backbone res"
@@ -374,6 +380,7 @@ class DERNet(models.DynamicModule):
                 inner_ratio=self.inner_ratio,
                 width_mult=self.width_mult,
                 in_channels=self.in_channels,
+                pool=self.pool,
             )
         return ExpertCNN(prune=self.prune)
 

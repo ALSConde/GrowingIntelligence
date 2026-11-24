@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from torch.nn import CrossEntropyLoss
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 
 from avalanche.benchmarks import SplitCIFAR100, SplitMNIST
 from avalanche.evaluation.metrics import accuracy_metrics, loss_metrics
@@ -50,16 +50,41 @@ SMOKE_CLASSES_PER_EXP = {"cifar100": 4, "mnist": 2}
 SMOKE_SHAPE = {"cifar100": (3, 32, 32), "mnist": (1, 28, 28)}
 
 
+def recipe_suffix(args) -> str:
+    """'_v2' quando vale a receita nova (cosseno, GAP, embedding, ...), mais --tag_suffix livre."""
+    return ("_v2" if getattr(args, "recipe", "legacy") == "v2" else "") + getattr(
+        args, "tag_suffix", ""
+    )
+
+
+def lr_decay_suffix(args) -> str:
+    """Sufixo do diretório de resultados para não sobrescrever os runs sem decaimento."""
+    d = getattr(args, "lr_decay", 1.0)
+    if d >= 1.0:
+        return ""
+    return ("_lrd" if args.lr_decay_on == "expansion" else "_lrs") + f"{d:g}"
+
+
 def method_tag(args) -> str:
     if args.strategy in DER_FAMILY:
+        orth_sfx = ""
+        if args.strategy == "orth_der":
+            # sem sufixo = comportamento antigo (soma); não sobrescreve resultados anteriores
+            orth_sfx = (
+                ("" if args.orth_reduce == "sum" else "_" + args.orth_reduce)
+                + ("_aux" if args.keep_aux else "")
+                + ("_notrm" if args.no_trm else "")
+            )
         return (
             args.strategy
             + ("_" + args.backbone if args.backbone in ("res", "mlp") else "")
             + ("_p" if args.prune else "")
+            + orth_sfx
+            + recipe_suffix(args)
         )
     if args.strategy == "joint":
-        return f"{args.arch}_joint"
-    return f"{args.arch}_{args.strategy}"
+        return f"{args.arch}_joint{recipe_suffix(args)}"
+    return f"{args.arch}_{args.strategy}{lr_decay_suffix(args)}{recipe_suffix(args)}"
 
 
 def n_total_classes(args) -> int:
@@ -139,6 +164,7 @@ def build_model(args, benchmark):
             backbone=args.backbone,
             inner_ratio=args.inner_ratio,
             width_mult=args.width_mult,
+            pool=args.pool,
         )
     if args.arch in MLP_ARCHS:
         from models.Model_EMLP import ExpandableMLP
@@ -152,13 +178,19 @@ def build_model(args, benchmark):
     if args.arch in RES_ARCHS:
         from models.Model_RCNN import ResExpandableCNN
 
-        return ResExpandableCNN(
+        model = ResExpandableCNN(
             width_mult=args.width_mult,
             inner_ratio=args.inner_ratio,
             attention=args.arch.endswith("_att"),
             d_att=args.d_att,
             mem_size=args.att_mem,
+            pool=args.pool,
+            emb_dim=args.emb_dim,
+            mem_mode=args.mem_mode,
+            mem_gain=args.att_mem_gain,
         )
+        model.report_head = args.classifier
+        return model
     if args.arch in ECNN_ARCHS:
         from models.Model_ECNN import ExpandableCNN, ExpandableCNNAttention
 
@@ -222,6 +254,51 @@ def build_plugins(args, model, device, n_classes):
             kw.update(Q_layer=model.wd_2, K_layer=model.wd_1, V_layer=model.wd_1)
         plugins.append(WDExpansionPlugin(**kw))
 
+    if args.lr_decay < 1.0:
+        from plugins.LRDecayPlugin import LRDecayPlugin
+
+        decay_plugin = LRDecayPlugin(
+            decay=args.lr_decay,
+            generation_on=args.lr_decay_on,
+            exclude=args.lr_decay_exclude,
+            min_scale=args.lr_decay_min,
+            verbose=not args.quiet,
+        )
+        if args.lr_decay_on == "expansion":
+            # plugins[0] é o BudgetedExpansionPlugin (ver acima); ele avisa a cada expansão
+            decay_plugin.attach(plugins[0])
+        plugins.append(decay_plugin)
+
+    if args.strategy not in DER_FAMILY and args.arch in RES_ARCHS:
+        if args.emb_dim > 0:
+            from plugins.PrototypePlugin import PrototypePlugin
+
+            # antes da expansão: o início da etapa precisa do embedding do modelo antigo (SDC)
+            plugins.insert(
+                0,
+                PrototypePlugin(
+                    sdc=not args.no_proto_sdc,
+                    sigma=args.proto_sigma,
+                    verbose=not args.quiet,
+                ),
+            )
+        if args.mem_guard != "none":
+            from plugins.MemoryGuardPlugin import MemoryGuardPlugin
+
+            plugins.append(
+                MemoryGuardPlugin(
+                    mode=args.mem_guard,
+                    energy=args.guard_energy,
+                    beta=args.guard_beta,
+                    max_rank_frac=args.guard_max_rank,
+                    verbose=not args.quiet,
+                )
+            )
+    if args.lr_schedule == "cosine":
+        from plugins.CosineLRPlugin import CosineLRPlugin
+
+        plugins.append(CosineLRPlugin(warmup_epochs=args.warmup_epochs))
+
     s = args.strategy
     mem = args.mem_per_class * n_classes
     if s == "ewc":
@@ -260,7 +337,15 @@ def build_plugins(args, model, device, n_classes):
 
 
 def build_strategy(args, model, plugins, device, n_classes):
-    optimizer = Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999))
+    if args.weight_decay > 0:
+        optimizer = AdamW(
+            model.parameters(),
+            lr=args.lr,
+            betas=(0.9, 0.999),
+            weight_decay=args.weight_decay,
+        )
+    else:
+        optimizer = Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999))
     evaluator = EvaluationPlugin(
         accuracy_metrics(epoch=True),
         loss_metrics(epoch=True),
@@ -269,7 +354,7 @@ def build_strategy(args, model, plugins, device, n_classes):
     common = dict(
         model=model,
         optimizer=optimizer,
-        criterion=CrossEntropyLoss(),
+        criterion=CrossEntropyLoss(label_smoothing=args.label_smoothing),
         train_mb_size=args.batch_size,
         train_epochs=args.epochs,
         eval_mb_size=args.eval_batch_size,

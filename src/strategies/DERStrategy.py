@@ -59,7 +59,7 @@ class DERStrategy(SupervisedTemplate):
             eval_every=eval_every,
             **kwargs,
         )
-        assert orth_reduce in ("sum", "mean")
+        assert orth_reduce in ("sum", "mean", "norm")
         self.prune = bool(getattr(model, "prune", False))
         self.prune_lambda = prune_lambda
         self.smax = smax
@@ -86,6 +86,10 @@ class DERStrategy(SupervisedTemplate):
         self._feats_all = None
         self._trm = None
         self.param_history: List[dict] = []
+        # diagnóstico: contribuição média de cada termo da perda (já multiplicada pelo peso)
+        self.loss_log: List[dict] = []
+        self._term_sum: dict = {}
+        self._term_n = 0
 
     def train_dataset_adaptation(self, **kwargs):
         super().train_dataset_adaptation(**kwargs)
@@ -102,7 +106,23 @@ class DERStrategy(SupervisedTemplate):
 
     def _before_training_epoch(self, **kwargs):
         self._epoch_it = 0
+        self._term_sum, self._term_n = {}, 0
         super()._before_training_epoch(**kwargs)
+
+    def _after_training_epoch(self, **kwargs):
+        if self._term_n:
+            row = {k: v / self._term_n for k, v in self._term_sum.items()}
+            row.update(
+                step=self.experience.current_experience,
+                epoch=int(self.clock.train_exp_epochs) + 1,
+            )
+            self.loss_log.append(row)
+        super()._after_training_epoch(**kwargs)
+
+    def _track(self, **terms):
+        for k, v in terms.items():
+            self._term_sum[k] = self._term_sum.get(k, 0.0) + float(v.detach())
+        self._term_n += 1
 
     def _before_training_iteration(self, **kwargs):
         if self.prune:
@@ -144,20 +164,32 @@ class DERStrategy(SupervisedTemplate):
             return ce
 
         loss = ce
+        terms = {"ce": ce}
         if self.prune and self.prune_lambda > 0:
-            loss = loss + self.prune_lambda * self.model.sparsity_loss()
+            sp = self.prune_lambda * self.model.sparsity_loss()
+            loss = loss + sp
+            terms["sparsity"] = sp
 
         known = self.model.known_classes
         if known == 0:
+            self._track(**terms)
             return loss
 
         y = self.mb_y
         if self.aux_weight > 0 and self._aux_logits is not None:
             aux_y = self.model.aux_target(y)
-            loss = loss + self.aux_weight * F.cross_entropy(self._aux_logits, aux_y)
+            aux = self.aux_weight * F.cross_entropy(self._aux_logits, aux_y)
+            loss = loss + aux
+            terms["aux"] = aux
         if self.lambda_s > 0 or self.lambda_i > 0:
             l_s, l_in, l_io = self._orth_losses(y)
             loss = loss + self.lambda_s * l_s + self.lambda_i * (l_in + l_io)
+            terms.update(
+                orth_s=self.lambda_s * l_s,
+                orth_in=self.lambda_i * l_in,
+                orth_io=self.lambda_i * l_io,
+            )
+        self._track(**terms)
         return loss
 
     @staticmethod
@@ -168,6 +200,13 @@ class DERStrategy(SupervisedTemplate):
         return cls, (onehot.t() @ feats) / onehot.sum(0).unsqueeze(1)
 
     def _red(self, x):
+        """Redução dos termos L_in e L_io (pares de médias de classe).
+
+        sum  -> soma (a penalidade cresce com o nº de classes: L_io tem até ~n_novas x n_antigas
+                pares, então pesa cada vez mais a cada etapa e sufoca a aprendizagem das
+                classes novas);
+        mean/norm -> média: cada termo fica em [0, 1] independentemente do nº de classes.
+        """
         if x.numel() == 0:
             return x.new_zeros(())
         return x.sum() if self.orth_reduce == "sum" else x.mean()
@@ -203,7 +242,19 @@ class DERStrategy(SupervisedTemplate):
             if self._trm is not None:
                 sq = sq * self._trm[cls_new[:, None], cls_j[None, :]]
             terms.append(sq.reshape(-1))
-        l_s = self._red(torch.cat(terms)) if terms else zero
+        if not terms:
+            l_s = zero
+        else:
+            sq_all = torch.cat(terms)
+            if self.orth_reduce == "sum":
+                l_s = sq_all.sum()
+            elif self.orth_reduce == "mean" or self._trm is None:
+                l_s = sq_all.mean()
+            else:
+                # "norm": os pesos TRM (softmax) já somam 1 por classe nova, então
+                # sum(sq*TRM)/n_novas é a média, sobre as classes novas, do cos² esperado
+                # sob a TRM -> escala [0, 1] sem diluir o termo (mean global o zeraria)
+                l_s = sq_all.sum() / len(cls_new)
         return l_s, l_in, l_io
 
     @torch.no_grad()

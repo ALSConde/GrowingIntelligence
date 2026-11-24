@@ -4,6 +4,13 @@ from torch.utils.data import DataLoader
 from avalanche.core import SupervisedPlugin
 
 
+def rebuild_optimizer(opt, params):
+    import inspect
+
+    accepted = inspect.signature(type(opt).__init__).parameters
+    return type(opt)(params, **{k: v for k, v in opt.defaults.items() if k in accepted})
+
+
 class BudgetedExpansionPlugin(SupervisedPlugin):
     def __init__(
         self,
@@ -32,6 +39,9 @@ class BudgetedExpansionPlugin(SupervisedPlugin):
         self.device = torch.device(device)
         self.verbose = verbose
         self.history = []
+        self.listeners = (
+            []
+        )
         self._p0 = None
         self._w0 = None
 
@@ -154,7 +164,9 @@ class BudgetedExpansionPlugin(SupervisedPlugin):
                 model.expand(l, n)
             if any(add.values()):
                 opt = strategy.optimizer
-                strategy.optimizer = type(opt)(model.parameters(), **opt.defaults)
+                strategy.optimizer = rebuild_optimizer(opt, model.parameters())
+                for notify in self.listeners:
+                    notify()
             entry.update(
                 {
                     "expanded": any(add.values()),

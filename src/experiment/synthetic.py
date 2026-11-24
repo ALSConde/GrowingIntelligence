@@ -12,6 +12,7 @@ def make_synthetic_benchmark(
     n_test: int = 20,
     seed: int = 0,
     fixed_order=None,
+    noise: float = 0.5,
 ):
     """fixed_order=None -> ordem aleatória (a partir de `seed`); lista -> essa ordem."""
     g = torch.Generator().manual_seed(seed)
@@ -19,7 +20,7 @@ def make_synthetic_benchmark(
 
     def make(n):
         y = torch.arange(n_classes).repeat_interleave(n)
-        x = protos[y] + 0.5 * torch.randn(len(y), *shape, generator=g)
+        x = protos[y] + noise * torch.randn(len(y), *shape, generator=g)
         return TensorDataset(x, y)
 
     return nc_benchmark(

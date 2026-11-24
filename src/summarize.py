@@ -68,7 +68,7 @@ def main():
     widths = [max(len(str(r[i])) for r in [head] + rows) for i in range(len(head))]
     for r in [head] + rows:
         print("  ".join(str(c).ljust(w) for c, w in zip(r, widths)))
-    with open(a.out, "w", newline="") as f:
+    with open(a.out, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(head)
         w.writerows(rows)

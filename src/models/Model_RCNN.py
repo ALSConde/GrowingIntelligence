@@ -28,8 +28,17 @@ class ResExpandableCNN(models.DynamicModule):
         d_att: int = 256,
         mem_size: int = 64,
         in_channels: int = 3,
+        pool: str = "flatten",
+        emb_dim: int = 0,
+        mem_mode: str = "append",
+        mem_gain: float = 1.0,
     ):
         super().__init__()
+        assert pool in ("flatten", "gap")
+        self.pool = pool
+        # posições espaciais que entram no fc1 (gap = 1 -> o fc1 não depende da resolução)
+        self.spatial = 1 if pool == "gap" else self.SPATIAL
+        self.emb_dim = int(emb_dim)
         self.in_channels = in_channels
         s = [max(1, int(round(b * width_mult))) for b in self.STREAM]
         fc = max(1, int(round(400 * width_mult)))
@@ -64,24 +73,61 @@ class ResExpandableCNN(models.DynamicModule):
         self.bn_b = nn.ModuleList([nn.BatchNorm2d(s[i]) for i in range(5)])
         if attention:
             self.spatial_attention = LinearAttention(
-                s[4], s[4], d_att, mem_size=mem_size
+                s[4],
+                s[4],
+                d_att,
+                mem_size=mem_size,
+                mem_mode=mem_mode,
+                mem_gain=mem_gain,
             )
             self.att_out = nn.Linear(d_att, s[4], bias=False)
             with torch.no_grad():
                 self.att_out.weight.copy_(torch.eye(s[4], d_att))
             self.bn_att = nn.BatchNorm2d(s[4])
-        self.fc1 = nn.Linear(s[4] * self.SPATIAL, fc)
+        self.fc1 = nn.Linear(s[4] * self.spatial, fc)
         self.fc2 = nn.Linear(fc, fc)
         if attention:
-            self.attention = LinearAttention(fc, fc, d_att, mem_size=mem_size)
+            self.attention = LinearAttention(
+                fc, fc, d_att, mem_size=mem_size, mem_mode=mem_mode, mem_gain=mem_gain
+            )
             self.proj3 = nn.Linear(d_att, fc)
+
+        if self.emb_dim > 0:
+            self.embed = nn.Linear(fc, self.emb_dim)
         self.classifier = IncrementalClassifier(
-            fc, initial_out_features=initial_classes
+            self.emb_dim if self.emb_dim > 0 else fc,
+            initial_out_features=initial_classes,
         )
+
+        self.proto_mode = False
+        self.proto_scale = 16.0
+        self.report_head = "linear"
+        self.last_emb = None
+        if self.emb_dim > 0:
+            self.register_buffer("proto", torch.zeros(initial_classes, self.emb_dim))
+            self.register_buffer(
+                "proto_valid", torch.zeros(initial_classes, dtype=torch.bool)
+            )
 
     def adaptation(self, experience):
         super().adaptation(experience)
         self.classifier.adaptation(experience=experience)
+        self._sync_proto()
+
+    @torch.no_grad()
+    def _sync_proto(self):
+        if self.emb_dim <= 0:
+            return
+        n = self.classifier.classifier.out_features
+        have = self.proto.size(0)
+        if have < n:
+            dev = self.proto.device
+            self.proto = torch.cat(
+                [self.proto, torch.zeros(n - have, self.emb_dim, device=dev)]
+            )
+            self.proto_valid = torch.cat(
+                [self.proto_valid, torch.zeros(n - have, dtype=torch.bool, device=dev)]
+            )
 
     def forward_acts(self, x):
         acts = []
@@ -96,7 +142,7 @@ class ResExpandableCNN(models.DynamicModule):
             flat = x.reshape(B, C, H * W).permute(0, 2, 1)
             res = self.att_out(self.spatial_attention(flat, flat, flat))
             x = self.bn_att(res.permute(0, 2, 1).reshape(B, C, H, W) + x)
-        x = x.reshape(B, -1)
+        x = x.mean(dim=(2, 3)) if self.pool == "gap" else x.reshape(B, -1)
         h1 = F.relu(self.fc1(x))
         acts.append(h1)
         h2 = F.relu(self.fc2(h1))
@@ -107,8 +153,20 @@ class ResExpandableCNN(models.DynamicModule):
             ).squeeze(1)
             h3 = self.proj3(h_att)
             acts.append(h3)
-            return self.classifier(h3), acts
-        return self.classifier(h2), acts
+            return self._head(h3), acts
+        return self._head(h2), acts
+
+    def _head(self, f):
+        if self.emb_dim <= 0:
+            return self.classifier(f)
+        e = self.embed(f)
+        self.last_emb = e
+        if self.proto_mode and not self.training:
+            en = F.normalize(e, dim=1)
+            pn = F.normalize(self.proto, dim=1)
+            logits = self.proto_scale * en @ pn.t()
+            return logits.masked_fill(~self.proto_valid.unsqueeze(0), -1e4)
+        return self.classifier(e)
 
     def forward(self, x):
         return self.forward_acts(x)[0]
@@ -127,14 +185,15 @@ class ResExpandableCNN(models.DynamicModule):
             c = self.stream[i]
             return 9 * c + 1 + 2 + 9 * c
         if i == 5:
-            own = self.stream[4] * self.SPATIAL + 1
+            own = self.stream[4] * self.spatial + 1
             down = w[6] + (2 * d if self.attention_on else 0)
         elif i == 6:
             own = w[5] + 1
-            down = d if self.attention_on else n_cls
+            head_out = self.emb_dim if self.emb_dim > 0 else n_cls
+            down = d if self.attention_on else head_out
         else:
             own = d + 1
-            down = n_cls
+            down = self.emb_dim if self.emb_dim > 0 else n_cls
         return own + down
 
     @torch.no_grad()
@@ -166,13 +225,19 @@ class ResExpandableCNN(models.DynamicModule):
             if self.attention_on:
                 self._grow_att_in(self.attention, ("proj_Q",), n)
             else:
-                self._grow_classifier_in(n)
+                self._grow_head_in(n)
         else:
             self.proj3 = self._grow_out(self.proj3, n)
-            self._grow_classifier_in(n)
+            self._grow_head_in(n)
         self.widths[i] += n
 
-    def _grow_classifier_in(self, n):
+    def _grow_head_in(self, n):
+        if self.emb_dim > 0:
+            e = self.embed
+            self.embed = self._grow_in(
+                e, n, lambda: nn.Linear(e.in_features + n, e.out_features)
+            )
+            return
         c = self.classifier.classifier
         self.classifier.classifier = self._grow_in(
             c, n, lambda: nn.Linear(c.in_features + n, c.out_features)
