@@ -4,26 +4,66 @@ from avalanche.core import SupervisedPlugin
 from models.layers.LinearAttention import LinearAttention
 
 
+def _eig_desc(Z):
+    """Autovalores (decrescentes) e autovetores de Z Z^T, Z: (D, R) em float64 na CPU.
+
+    Usa a matriz de covariância D x D (D = 256 ou 64) com eigh, em vez de SVD da matriz alta:
+    é bem mais robusto (o SVD em GPU pode não convergir com matrizes mal condicionadas ou com
+    valores singulares repetidos) e custa pouco."""
+    C = Z @ Z.t()
+    C = 0.5 * (C + C.t())
+    try:
+        ev, V = torch.linalg.eigh(C)
+    except Exception:  # raro: tenta de novo com um pequeno jitter na diagonal
+        jitter = 1e-10 * float(torch.trace(C).clamp_min(1e-30)) / C.shape[0]
+        ev, V = torch.linalg.eigh(C + jitter * torch.eye(C.shape[0], dtype=C.dtype))
+    ev = ev.flip(0).clamp_min(0.0)
+    return ev, V.flip(1)
+
+
 def gpm_update(U, X, energy, max_rank):
-    """Acrescenta a U (D x r, ortonormal) as direções de X (R x D) que faltam para reter `energy`."""
-    X = X.t().float()  # (D, R)
-    total = (X**2).sum()
-    if float(total) <= 0:
+    """Acrescenta a U (D x r, ortonormal) as direções de X (R x D) que faltam para reter `energy`.
+
+    Devolve U inalterado (sem levantar exceção) se X tiver valores não finitos ou energia nula.
+    """
+    dev = X.device
+    if not bool(torch.isfinite(X).all()):
+        print(
+            "[mem-guard] AVISO: valores não finitos nas consultas/pesos; base não atualizada"
+        )
         return U
-    if U is None or U.shape[1] == 0:
-        Uu, S, _ = torch.linalg.svd(X, full_matrices=False)
-        cum = torch.cumsum(S**2, 0) / total
-        k = min(int((cum < energy).sum().item()) + 1, max_rank, Uu.shape[1])
-        return Uu[:, :k].contiguous()
-    proj = U.t() @ X
-    kept = (proj**2).sum()
-    if float(kept / total) >= energy or U.shape[1] >= max_rank:
+    Z = X.t().double().cpu()  # (D, R)
+    total = float((Z**2).sum())
+    if not (total > 0 and total < float("inf")):
         return U
-    Uu, S, _ = torch.linalg.svd(X - U @ proj, full_matrices=False)
-    cum = (kept + torch.cumsum(S**2, 0)) / total
-    k = min(int((cum < energy).sum().item()) + 1, max_rank - U.shape[1], Uu.shape[1])
-    Q, _ = torch.linalg.qr(torch.cat([U, Uu[:, :k]], dim=1))
-    return Q.contiguous()
+    Z = Z / total**0.5  # energia total = 1: evita estouro numérico em escalas extremas
+    Uc = None if U is None or U.shape[1] == 0 else U.double().cpu()
+    kept = 0.0
+    if Uc is not None:
+        proj = Uc.t() @ Z
+        kept = float((proj**2).sum())
+        if kept >= energy or Uc.shape[1] >= max_rank:
+            return U
+        Z = Z - Uc @ proj
+    ev, V = _eig_desc(Z)
+    tol = 1e-12 * max(float(ev[0]), 1e-300)
+    n_sig = int((ev > tol).sum())  # posto numérico: não acrescenta direções de ruído
+    if n_sig == 0:
+        return U
+    cum = kept + torch.cumsum(ev, 0)
+    k = int((cum < energy).sum().item()) + 1
+    budget = max_rank - (0 if Uc is None else Uc.shape[1])
+    k = min(k, n_sig, budget)
+    if k <= 0:
+        return U
+    new = V[:, :k]
+    if Uc is None:
+        out = new
+    else:
+        out, _ = torch.linalg.qr(
+            torch.cat([Uc, new], dim=1)
+        )  # reortonormaliza em float64
+    return out.float().to(dev).contiguous()
 
 
 class MemoryGuardPlugin(SupervisedPlugin):
@@ -94,6 +134,13 @@ class MemoryGuardPlugin(SupervisedPlugin):
                 sel = torch.randperm(q.size(0), device=q.device)[: self.max_rows]
                 q, w, mass = q[sel], w[sel], mass[sel]
             M, d = m.k_mem.shape
+            if not (bool(torch.isfinite(q).all()) and bool(torch.isfinite(mass).all())):
+                print(
+                    f"[mem-guard] AVISO: '{name}' produziu valores não finitos (o treino "
+                    "provavelmente divergiu); proteção não atualizada nesta etapa"
+                )
+                entry["modules"][name] = {"skipped": "nao_finito"}
+                continue
             self.imp[name] = self.imp.get(
                 name, torch.zeros(M, device=q.device)
             ) + mass.mean(0)

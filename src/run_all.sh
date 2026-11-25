@@ -19,9 +19,9 @@ if [ -n "$SMOKE" ]; then EXTRA="$EXTRA --smoke"; SFX="_smoke"; fi
 PAR=${PAR:-1}
 PAR_DER=${PAR_DER:-$(( PAR < 2 ? PAR : 2 ))}
 
-run() { echo "+ python src/$*"; if [ -z "$DRY" ]; then python "$@" || exit 1; fi; }
+run() { echo "+ python $*"; if [ -z "$DRY" ]; then python "$@" || exit 1; fi; }
 # $EXTRA vem ANTES dos argumentos do estágio: em argparse vale a última ocorrência
-matrix() { run run_matrix.py --dataset $DATASET $EXTRA "$@" --parallel $CUR_PAR; }
+matrix() { run src/run_matrix.py --dataset $DATASET $EXTRA "$@" --parallel $CUR_PAR; }
 CUR_PAR=$PAR
 
 # largura da CNN fixa que iguala o nº FINAL de parâmetros do WE (receita v2: pool gap + emb 128)

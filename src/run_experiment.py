@@ -265,8 +265,8 @@ def get_args(argv=None):
         "estatísticas dos WDLayer (ver README)",
     )
     # estratégias do artigo
-    p.add_argument("--ewc_lambda", type=float, default=1e9)
-    p.add_argument("--si_lambda", type=float, default=1e9)
+    p.add_argument("--ewc_lambda", type=float, default=1e3)
+    p.add_argument("--si_lambda", type=float, default=1e3)
     p.add_argument("--lwf_beta", type=float, default=1.0)
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--mem_per_class", type=int, default=100)
