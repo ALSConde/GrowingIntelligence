@@ -87,7 +87,7 @@ def main():
     p.add_argument(
         "--parallel",
         type=int,
-        default=1,
+        default=2,
         help="nº de execuções simultâneas na mesma GPU (cada uma é uma seed de uma configuração)",
     )
     p.add_argument("--log_dir", default="logs")
